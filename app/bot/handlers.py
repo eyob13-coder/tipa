@@ -1,8 +1,12 @@
+import io
 import logging
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+
+import pytesseract
+from PIL import Image
 
 from telegram import (
     InlineKeyboardButton,
@@ -549,7 +553,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         await query.edit_message_text(
             "📝 **Payment Sent Confirmation**\n\n"
-            "Please send the transaction **Reference Number** or **SMS Receipt Code** from Telebirr/CBE (e.g., `TX987654`):",
+            "Please send the transaction **Reference Number** / **SMS Code** (e.g., `TLB12345678` or `FT12345678`), **OR upload / paste a screenshot photo of your Telebirr / CBE payment receipt**! 📸",
             parse_mode="Markdown",
         )
 
@@ -560,6 +564,73 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif data.startswith("reject_tip:"):
         tip_id_str = data.split(":")[1]
         await handle_creator_approval(update, context, tip_id_str, is_approve=False)
+
+
+def extract_ref_code_from_image(image_bytes: bytes) -> Optional[str]:
+    """Extract Telebirr or CBE transaction reference number from screenshot image bytes using OCR & Regex."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        ocr_text = pytesseract.image_to_string(img)
+        logger.info(f"OCR Extracted text snippet: {ocr_text[:200]}")
+
+        patterns = [
+            r"\b(TLB[A-Za-z0-9]{7,16})\b",
+            r"\b(FT[0-9]{8,16})\b",
+            r"\b(TX[A-Za-z0-9]{6,16})\b",
+            r"\b([A-Za-z0-9]{10,16})\b",
+        ]
+        for pattern in patterns:
+            matches = re.findall(pattern, ocr_text)
+            for m in matches:
+                clean_m = m.upper()
+                if len(clean_m) >= 6 and re.match(r"^[A-Z0-9\-_]{6,30}$", clean_m):
+                    return clean_m
+    except Exception as e:
+        logger.warning(f"OCR processing fallback: {e}")
+    return None
+
+
+async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle receipt screenshot upload by tipper during verification step."""
+    if not update.effective_message or not update.effective_message.photo:
+        return
+
+    if "pending_verify_tip_id" not in context.user_data:
+        await update.effective_message.reply_text("📸 Please start a tip session first or run /help!")
+        return
+
+    tip_id_str = context.user_data.get("pending_verify_tip_id")
+    photo = update.effective_message.photo[-1]
+    photo_file = await photo.get_file()
+    photo_bytes = await photo_file.download_as_bytearray()
+
+    caption = (update.effective_message.caption or "").strip()
+    extracted_ref = None
+
+    if caption:
+        match = re.search(r"\b([A-Za-z0-9\-_]{6,30})\b", caption)
+        if match:
+            extracted_ref = match.group(1).upper()
+
+    if not extracted_ref:
+        extracted_ref = extract_ref_code_from_image(bytes(photo_bytes))
+
+    if extracted_ref:
+        context.user_data.pop("pending_verify_tip_id")
+        await update.effective_message.reply_text(
+            f"📸 **Receipt Screenshot Processed!**\n"
+            f"Extracted Reference Code: `{extracted_ref}`\n\n"
+            f"Submitting payment claim for creator verification...",
+            parse_mode="Markdown",
+        )
+        await process_tip_verification_claim(update, context, tip_id_str, ref_code=extracted_ref)
+    else:
+        await update.effective_message.reply_text(
+            "📸 **Receipt Screenshot Received!**\n\n"
+            "We received your payment receipt screenshot. "
+            "Please type or copy-paste your **Reference / SMS Code** (e.g. `TLB12345678` or `FT12345678`) as text below to complete your claim:",
+            parse_mode="Markdown",
+        )
 
 
 async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

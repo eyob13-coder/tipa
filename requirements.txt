@@ -11,3 +11,5 @@ pydantic-settings==2.15.0
 python-dotenv==1.2.2
 pytest==9.0.3
 pytest-asyncio==1.4.0
+Pillow>=11.0.0
+pytesseract>=0.3.13

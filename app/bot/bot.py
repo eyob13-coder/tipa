@@ -34,6 +34,7 @@ from app.bot.handlers import (
     inline_query_handler,
     auto_channel_post_handler,
     addchannel_command,
+    receipt_photo_handler,
     METHOD_CHOICE,
     BANK_CHOICE,
     ACCOUNT_NUM,
@@ -129,7 +130,10 @@ def build_telegram_application() -> Application:
         )
     )
 
-    # Text handler for custom tip amount, note entry, or payment reference code
+    # Handle photo receipt screenshots
+    app.add_handler(MessageHandler(filters.PHOTO, receipt_photo_handler))
+
+    # General text message handler (custom tip amounts / custom notes / payment ref codes)
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
