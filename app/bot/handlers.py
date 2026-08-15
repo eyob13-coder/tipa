@@ -36,7 +36,7 @@ from app.bot.keyboards import (
 logger = logging.getLogger(__name__)
 
 # Conversation states for registration
-METHOD_CHOICE, BANK_CHOICE, ACCOUNT_NUM, ACCOUNT_NAME, CONFIRMATION = range(5)
+METHOD_CHOICE, BANK_CHOICE, ACCOUNT_NUM, ACCOUNT_NAME, CHANNEL_LINK, CONFIRMATION = range(6)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -288,28 +288,83 @@ async def account_number_received(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def account_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receive account holder name and present confirmation summary."""
+    """Receive account holder name and prompt for optional channel link (Step 4/4)."""
     if not update.effective_message or not update.effective_message.text:
         return ACCOUNT_NAME
 
     account_name = update.effective_message.text.strip()
     context.user_data["account_name"] = account_name
 
-    method = context.user_data.get("selected_method", "cbe").upper()
-    bank_name = context.user_data.get("selected_bank_name", "Bank")
-    account_num = context.user_data.get("account_number", "")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏩ Skip Channel Link For Now", callback_data="skip_channel_link")]
+    ])
 
-    keyboard = get_confirm_registration_keyboard()
     await update.effective_message.reply_text(
-        f"📋 **Please Confirm Registration Details:**\n\n"
-        f"💳 **Payment Method:** {method}\n"
-        f"🏦 **Bank / Service:** {bank_name}\n"
-        f"🔢 **Phone / Account Number:** `{account_num}`\n"
-        f"👤 **Account Holder:** {account_name}\n\n"
-        f"Click **Confirm** below to save your details and generate your tip link.",
+        "📢 **Step 4/4: Link Your Telegram Channel (Optional)**\n\n"
+        "Forward **ANY message** from your channel into this chat, or send your channel handle (e.g. `@glitchcrafts`).\n\n"
+        "*(Or tap Skip below to complete registration and link later using `/addchannel`)*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
+    return CHANNEL_LINK
+
+
+async def channel_link_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive channel link/forward or skip callback and show registration summary."""
+    query = update.callback_query
+    msg = update.effective_message
+
+    if query:
+        await query.answer()
+        if query.data == "skip_channel_link":
+            return await show_registration_confirmation(update, context)
+
+    if msg:
+        forward_chat = None
+        if hasattr(msg, "forward_origin") and msg.forward_origin and hasattr(msg.forward_origin, "chat"):
+            forward_chat = msg.forward_origin.chat
+        elif getattr(msg, "forward_from_chat", None):
+            forward_chat = msg.forward_from_chat
+
+        raw_input = (msg.text or "").strip()
+        if not forward_chat and raw_input:
+            clean_handle = raw_input.replace("https://t.me/", "").replace("http://t.me/", "").strip("@/ ")
+            if clean_handle:
+                try:
+                    forward_chat = await context.bot.get_chat(f"@{clean_handle}")
+                except Exception as e:
+                    logger.warning(f"Could not resolve channel @{clean_handle}: {e}")
+
+        if forward_chat and getattr(forward_chat, "type", None) == "channel":
+            context.user_data["selected_channel_id"] = str(forward_chat.id)
+            context.user_data["selected_channel_title"] = forward_chat.title or forward_chat.username or "Channel"
+            await msg.reply_text(f"✅ Linked Channel: **{context.user_data['selected_channel_title']}**", parse_mode="Markdown")
+
+    return await show_registration_confirmation(update, context)
+
+
+async def show_registration_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Present confirmation summary for creator registration."""
+    method = context.user_data.get("selected_method", "cbe").upper()
+    bank_name = context.user_data.get("selected_bank_name", "Bank")
+    account_num = context.user_data.get("account_number", "")
+    account_name = context.user_data.get("account_name", "")
+    channel_title = context.user_data.get("selected_channel_title", "None")
+
+    keyboard = get_confirm_registration_keyboard()
+    summary = (
+        f"📋 **Registration Confirmation**\n\n"
+        f"💳 Payment Method: **{method}** ({bank_name})\n"
+        f"🔢 Account Number: `{account_num}`\n"
+        f"👤 Account Holder: **{account_name}**\n"
+        f"📢 Linked Channel: **{channel_title}**\n\n"
+        f"Please verify your details and tap **Confirm & Register** below:"
+    )
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(summary, reply_markup=keyboard, parse_mode="Markdown")
+    elif update.effective_message:
+        await update.effective_message.reply_text(summary, reply_markup=keyboard, parse_mode="Markdown")
     return CONFIRMATION
 
 
@@ -360,6 +415,7 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
             except Exception as ce:
                 logger.warning(f"Chapa subaccount creation fallback to manual: {ce}")
 
+        channel_id = context.user_data.get("selected_channel_id")
         async with AsyncSessionLocal() as session:
             stmt = select(Creator).where(Creator.telegram_id == user.id)
             res = await session.execute(stmt)
@@ -373,6 +429,8 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
                 creator.chapa_subaccount_id = chapa_sub_id
                 creator.display_name = display_name
                 creator.telegram_username = user.username
+                if channel_id:
+                    creator.channel_id = channel_id
             else:
                 creator = Creator(
                     telegram_id=user.id,
@@ -383,6 +441,7 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
                     account_number=account_num,
                     account_name=account_name,
                     chapa_subaccount_id=chapa_sub_id,
+                    channel_id=channel_id,
                 )
                 session.add(creator)
 

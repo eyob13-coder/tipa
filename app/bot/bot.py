@@ -24,6 +24,7 @@ from app.bot.handlers import (
     bank_pagination_callback,
     account_number_received,
     account_name_received,
+    channel_link_received,
     confirm_registration_callback,
     cancel_registration,
     tip_amount_callback,
@@ -37,6 +38,7 @@ from app.bot.handlers import (
     BANK_CHOICE,
     ACCOUNT_NUM,
     ACCOUNT_NAME,
+    CHANNEL_LINK,
     CONFIRMATION,
 )
 
@@ -90,6 +92,10 @@ def build_telegram_application() -> Application:
             ],
             ACCOUNT_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, account_name_received),
+            ],
+            CHANNEL_LINK: [
+                CallbackQueryHandler(channel_link_received, pattern=r"^skip_channel_link$"),
+                MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.FORWARDED, channel_link_received),
             ],
             CONFIRMATION: [
                 CallbackQueryHandler(confirm_registration_callback, pattern=r"^(reg_|back_to_methods$)"),
