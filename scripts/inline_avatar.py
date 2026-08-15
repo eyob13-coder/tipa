@@ -14,15 +14,15 @@ def inline_avatar():
     data_uri = f"data:image/png;base64,{b64_data}"
     
     html = html_path.read_text(encoding="utf-8")
-    # Replace img src for app-logo-img
+    # Replace <div class="logo-badge">🎁</div> with <img src="..." class="app-logo-img">
     updated_html = re.sub(
-        r'<img\s+src="[^"]*"\s+class="app-logo-img"[^>]*>',
+        r'<div class="logo-badge">🎁</div>',
         f'<img src="{data_uri}" class="app-logo-img" alt="Tipa Logo">',
         html
     )
     
     html_path.write_text(updated_html, encoding="utf-8")
-    print("Successfully inlined avatar.png into app/static/index.html!")
+    print("Successfully replaced gift emoji with inlined 3D avatar logo in index.html!")
 
 if __name__ == "__main__":
     inline_avatar()
