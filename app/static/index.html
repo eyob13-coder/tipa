@@ -458,13 +458,11 @@
         creatorId = creatorId.replace('tip_', '');
       }
 
-      // If no creator_id in URL, check if Telegram user is registered
       const tgUser = tg?.initDataUnsafe?.user;
       const userIdentifier = creatorId || (tgUser ? tgUser.id : null);
 
       if (!userIdentifier) {
-        document.getElementById('creator-display-name').innerText = "Tipa Tipping Bot";
-        document.getElementById('creator-method-badge').innerText = "REGISTER WITH @TipaPayBot";
+        renderUnregisteredView();
         return;
       }
 
@@ -473,19 +471,28 @@
         if (res.ok) {
           currentCreatorData = await res.json();
 
-          if (creatorId || (tgUser && tgUser.id != currentCreatorData.telegram_id)) {
-            // Render Tipper View
+          if (creatorId && currentCreatorData.id !== creatorId) {
             renderTipperView(currentCreatorData);
-          } else {
-            // Render Creator Dashboard View
+          } else if (tgUser && tgUser.id == currentCreatorData.telegram_id) {
             renderCreatorDashboard(currentCreatorData);
+          } else {
+            renderTipperView(currentCreatorData);
           }
         } else {
-          document.getElementById('creator-display-name').innerText = "Creator Not Found";
+          renderUnregisteredView();
         }
       } catch (err) {
         console.error("Failed to load creator data:", err);
+        renderUnregisteredView();
       }
+    }
+
+    function renderUnregisteredView() {
+      document.getElementById('tipper-view').classList.remove('hidden');
+      document.getElementById('creator-view').classList.add('hidden');
+      document.getElementById('creator-display-name').innerText = "Welcome to Tipa!";
+      document.getElementById('creator-avatar').innerText = "🎁";
+      document.getElementById('creator-method-badge').innerText = "REGISTER WITH @TipaPayBot";
     }
 
     function renderTipperView(creator) {
