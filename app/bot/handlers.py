@@ -134,14 +134,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     bot_name = context.bot.username or settings.bot_username
     help_text = (
         f"📖 **Tipa Bot Command Guide & Help (@{bot_name})**\n\n"
-        f"**Commands Overview:**\n\n"
-        f"🚀 **/start** — Welcome screen & deep link handler. Tapping a creator's tip link starts the tipping flow.\n\n"
-        f"🏦 **/register** — Register or update your receiving payment method (**Telebirr**, **CBE**, or **Chapa**). Takes less than 1 minute!\n\n"
-        f"📢 **/post** — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
-        f"📊 **/mytips** — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
+        f"**Commands Overview (Tap any command to run):**\n\n"
+        f"🚀 /start — Welcome screen & deep link handler. Tapping a creator's tip link starts the tipping flow.\n\n"
+        f"🏦 /register — Register or update your receiving payment method (**Telebirr**, **CBE**, or **Chapa**). Takes less than 1 minute!\n\n"
+        f"📢 /addchannel — Link your Telegram channel for auto-tipping.\n\n"
+        f"📢 /post — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
+        f"📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
         f"💬 **Supporter Notes** — Tippers can leave an optional encouraging message/note with their tip.\n\n"
         f"⚡ **Inline Mode** — Type `@{bot_name}` while composing a post in any Telegram channel to attach a tip button instantly!\n\n"
-        f"❌ **/cancel** — Cancel any active registration step or tipping session."
+        f"❌ /cancel — Cancel any active registration step or tipping session."
     )
     await update.effective_message.reply_text(help_text, parse_mode="Markdown")
 
