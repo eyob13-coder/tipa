@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -569,8 +570,20 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Case A: Pending transaction reference verification code
     if "pending_verify_tip_id" in context.user_data:
-        tip_id_str = context.user_data.pop("pending_verify_tip_id")
-        await process_tip_verification_claim(update, context, tip_id_str, ref_code=text)
+        tip_id_str = context.user_data.get("pending_verify_tip_id")
+        clean_ref = text.strip()
+
+        # Validate reference code format (must be 6-30 alphanumeric characters)
+        if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
+            await update.effective_message.reply_text(
+                "⚠️ **Invalid Reference / SMS Code Format**\n\n"
+                "Please enter a valid Telebirr (e.g. `TLB12345678`) or CBE (e.g. `FT12345678`) transaction reference code (at least 6 characters, no spaces or special symbols):",
+                parse_mode="Markdown",
+            )
+            return
+
+        context.user_data.pop("pending_verify_tip_id")
+        await process_tip_verification_claim(update, context, tip_id_str, ref_code=clean_ref)
         return
 
     # Case B: Pending custom note entry
@@ -865,7 +878,16 @@ async def handle_creator_approval(
         else:
             tip.status = "failed"
             await session.commit()
-            await query.edit_message_text("❌ Tip rejected.")
+            await query.edit_message_text(f"❌ **Tip Claim Rejected**\n\nMarked claim for `{tip.chapa_ref_id}` as unverified/rejected.")
+            if tip.tipper_telegram_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=tip.tipper_telegram_id,
+                        text=f"❌ **Tip Claim Unverified**\n\nYour tip claim for **{float(tip.amount):g} ETB** (Ref: `{tip.chapa_ref_id}`) could not be verified by **{creator.display_name}**.",
+                        parse_mode="Markdown",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify tipper of rejection: {e}")
 
 
 async def channel_post_generator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
