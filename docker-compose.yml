@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: tipa_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: tipa_user
+      POSTGRES_PASSWORD: tipa_password
+      POSTGRES_DB: tipa_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    container_name: tipa_app
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN:-}
+      - BOT_USERNAME=TipaPayBot
+      - DATABASE_URL=postgresql+asyncpg://tipa_user:tipa_password@db:5432/tipa_db
+      - WEBHOOK_BASE_URL=http://localhost:8000
+      - PLATFORM_FEE_BIRR=0.0
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

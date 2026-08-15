@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: tipa-app
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        value: TipaPayBot
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tipa-db
+          property: connectionString
+      - key: WEBHOOK_BASE_URL
+        value: https://tipa-app.onrender.com
+      - key: PLATFORM_FEE_BIRR
+        value: "0.0"
+      - key: PYTHON_VERSION
+        value: 3.11.0
+
+databases:
+  - name: tipa-db
+    databaseName: tipa_db
+    user: tipa_user
+    plan: free

@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Tipa — Telegram Tipping</title>
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- QRCode.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    :root {
+      --bg-color: var(--tg-theme-bg-color, #0f172a);
+      --secondary-bg: var(--tg-theme-secondary-bg-color, #1e293b);
+      --text-color: var(--tg-theme-text-color, #f8fafc);
+      --hint-color: var(--tg-theme-hint-color, #94a3b8);
+      --link-color: var(--tg-theme-link-color, #38bdf8);
+      --button-color: var(--tg-theme-button-color, #6366f1);
+      --button-text: var(--tg-theme-button-text-color, #ffffff);
+      --accent-glow: rgba(99, 102, 241, 0.3);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --gold-color: #f59e0b;
+      --success-color: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 480px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .logo-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+      border-radius: 16px;
+      font-size: 28px;
+      margin-bottom: 12px;
+      box-shadow: 0 8px 24px var(--accent-glow);
+    }
+
+    .app-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-color);
+      margin-bottom: 4px;
+    }
+
+    .app-subtitle {
+      font-size: 13px;
+      color: var(--hint-color);
+    }
+
+    /* Cards */
+    .card {
+      background: var(--secondary-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    .creator-profile {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .avatar-circle {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 20px;
+      color: #fff;
+    }
+
+    .creator-name {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .method-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--link-color);
+      margin-top: 4px;
+      text-transform: uppercase;
+    }
+
+    /* Amount Chips */
+    .section-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--hint-color);
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .amount-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .amount-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1.5px solid var(--card-border);
+      border-radius: 12px;
+      padding: 14px 8px;
+      text-align: center;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .amount-chip.active {
+      background: var(--button-color);
+      color: var(--button-text);
+      border-color: var(--button-color);
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    .custom-input-group {
+      margin-bottom: 16px;
+    }
+
+    .custom-input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1.5px solid var(--card-border);
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 16px;
+      color: var(--text-color);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .custom-input:focus {
+      border-color: var(--button-color);
+    }
+
+    .textarea-input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1.5px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 14px;
+      color: var(--text-color);
+      outline: none;
+      resize: none;
+      height: 70px;
+      margin-bottom: 16px;
+    }
+
+    /* Primary Action Button */
+    .btn-primary {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: var(--button-text);
+      border: none;
+      border-radius: 14px;
+      padding: 16px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 8px 20px var(--accent-glow);
+      transition: transform 0.1s ease, opacity 0.2s;
+    }
+
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+
+    /* Modal / Pay Sheet */
+    .pay-sheet {
+      display: none;
+    }
+
+    .pay-sheet.active {
+      display: block;
+    }
+
+    .instruction-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px dashed var(--link-color);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .account-detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .account-num {
+      font-family: monospace;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--link-color);
+      background: rgba(56, 189, 248, 0.1);
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: var(--text-color);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Stats Grid for Creator */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 14px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .stat-val {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--gold-color);
+      margin-top: 4px;
+    }
+
+    #qrcode-container {
+      display: flex;
+      justify-content: center;
+      padding: 16px;
+      background: #ffffff;
+      border-radius: 16px;
+      margin: 16px 0;
+    }
+
+    .tip-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .tip-item:last-child {
+      border-bottom: none;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-badge">🎁</div>
+      <div class="app-title">Tipa</div>
+      <div class="app-subtitle">Telegram Tipping for Ethiopian Creators</div>
+    </div>
+
+    <!-- VIEW A: Tipper Tipping View -->
+    <div id="tipper-view">
+      <div class="card">
+        <div class="creator-profile">
+          <div class="avatar-circle" id="creator-avatar">C</div>
+          <div>
+            <div class="creator-name" id="creator-display-name">Loading Creator...</div>
+            <div class="method-badge" id="creator-method-badge">TELEBIRR</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 1: Select Amount & Note -->
+      <div id="step-select-amount" class="card">
+        <div class="section-label">Select Tip Amount (ETB)</div>
+        <div class="amount-grid">
+          <div class="amount-chip" onclick="selectAmount(10)">10 ETB</div>
+          <div class="amount-chip active" onclick="selectAmount(25)">25 ETB</div>
+          <div class="amount-chip" onclick="selectAmount(50)">50 ETB</div>
+          <div class="amount-chip" onclick="selectAmount(100)">100 ETB</div>
+          <div class="amount-chip" onclick="selectAmount(250)">250 ETB</div>
+          <div class="amount-chip" onclick="selectAmount('custom')">✏️ Custom</div>
+        </div>
+
+        <div id="custom-amount-wrap" class="custom-input-group hidden">
+          <input type="number" id="custom-amount-input" class="custom-input" placeholder="Enter custom amount in Birr (e.g. 75)" min="5" max="50000" oninput="updateCustomAmount(this.value)">
+        </div>
+
+        <div class="section-label">Supporter Note (Optional)</div>
+        <textarea id="tip-note-input" class="textarea-input" placeholder="Leave an encouraging message for the creator..."></textarea>
+
+        <button id="btn-pay-trigger" class="btn-primary" onclick="startTipSession()">
+          🎁 Tip 25 ETB
+        </button>
+      </div>
+
+      <!-- Step 2: Payment Instructions Sheet -->
+      <div id="step-payment-sheet" class="card pay-sheet">
+        <div class="section-label" id="pay-sheet-title">Telebirr Payment Details</div>
+        
+        <div class="instruction-box">
+          <div class="account-detail-row">
+            <span style="font-size: 13px; color: var(--hint-color);">Recipient</span>
+            <span id="sheet-recipient-name" style="font-weight: 600;">-</span>
+          </div>
+          <div class="account-detail-row">
+            <span style="font-size: 13px; color: var(--hint-color);" id="sheet-acc-label">Phone Number</span>
+            <div>
+              <span id="sheet-account-num" class="account-num">-</span>
+              <button class="copy-btn" onclick="copyAccountNum()">Copy</button>
+            </div>
+          </div>
+          <div class="account-detail-row">
+            <span style="font-size: 13px; color: var(--hint-color);">Amount</span>
+            <span id="sheet-amount" style="font-weight: 700; color: var(--gold-color);">0 ETB</span>
+          </div>
+          <div class="account-detail-row">
+            <span style="font-size: 13px; color: var(--hint-color);">Ref Code</span>
+            <span id="sheet-ref-code" style="font-family: monospace; font-size: 12px;">-</span>
+          </div>
+        </div>
+
+        <div style="font-size: 13px; color: var(--hint-color); margin-bottom: 12px;">
+          <p id="sheet-ussd-info">💡 <strong>USSD Dial Option:</strong> Dial <span id="sheet-ussd-code" style="color: var(--link-color); font-weight:700;">*127#</span> on your phone to transfer without an app.</p>
+        </div>
+
+        <div class="custom-input-group">
+          <input type="text" id="receipt-ref-input" class="custom-input" placeholder="Paste SMS Receipt Code (e.g. TX987654)">
+        </div>
+
+        <button class="btn-primary" onclick="submitPaymentClaim()">
+          ✅ Confirm & Submit Receipt Code
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW B: Creator Dashboard View -->
+    <div id="creator-view" class="hidden">
+      <div class="card">
+        <div class="creator-profile" style="margin-bottom: 16px;">
+          <div class="avatar-circle" id="dashboard-avatar">C</div>
+          <div>
+            <div class="creator-name" id="dashboard-name">Creator Dashboard</div>
+            <div class="method-badge" id="dashboard-method">Active</div>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div style="font-size: 12px; color: var(--hint-color);">Total Earnings</div>
+            <div class="stat-val" id="stat-total-earned">0.00 ETB</div>
+          </div>
+          <div class="stat-card">
+            <div style="font-size: 12px; color: var(--hint-color);">Total Tips</div>
+            <div class="stat-val" id="stat-total-count">0</div>
+          </div>
+        </div>
+
+        <div class="section-label">Your Channel Tipping QR Code</div>
+        <div id="qrcode-container"></div>
+        <div style="text-align: center; font-size: 12px; color: var(--hint-color); margin-bottom: 12px;">
+          Share this QR code or link in your Telegram channel posts!
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-label">Recent Supporter Tips</div>
+        <div id="recent-tips-list">
+          <div style="text-align: center; font-size: 13px; color: var(--hint-color); padding: 16px;">
+            No tips received yet. Share your tipping link in your channel!
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    let selectedTipAmount = 25;
+    let currentCreatorData = null;
+    let activeTipId = null;
+
+    // Helper: Parse URL parameters
+    function getQueryParam(param) {
+      const urlParams = new URLSearchParams(window.location.search);
+      let val = urlParams.get(param);
+      if (!val && tg?.initDataUnsafe?.start_param) {
+        val = tg.initDataUnsafe.start_param;
+      }
+      return val;
+    }
+
+    // Main Init Logic
+    async function initApp() {
+      let creatorId = getQueryParam('creator_id') || getQueryParam('startapp');
+      if (creatorId && creatorId.startsWith('tip_')) {
+        creatorId = creatorId.replace('tip_', '');
+      }
+
+      // If no creator_id in URL, check if Telegram user is registered
+      const tgUser = tg?.initDataUnsafe?.user;
+      const userIdentifier = creatorId || (tgUser ? tgUser.id : null);
+
+      if (!userIdentifier) {
+        document.getElementById('creator-display-name').innerText = "Tipa Tipping Bot";
+        document.getElementById('creator-method-badge').innerText = "REGISTER WITH @TipaPayBot";
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/creator/${userIdentifier}`);
+        if (res.ok) {
+          currentCreatorData = await res.json();
+
+          if (creatorId || (tgUser && tgUser.id != currentCreatorData.telegram_id)) {
+            // Render Tipper View
+            renderTipperView(currentCreatorData);
+          } else {
+            // Render Creator Dashboard View
+            renderCreatorDashboard(currentCreatorData);
+          }
+        } else {
+          document.getElementById('creator-display-name').innerText = "Creator Not Found";
+        }
+      } catch (err) {
+        console.error("Failed to load creator data:", err);
+      }
+    }
+
+    function renderTipperView(creator) {
+      document.getElementById('tipper-view').classList.remove('hidden');
+      document.getElementById('creator-view').classList.add('hidden');
+
+      document.getElementById('creator-display-name').innerText = creator.display_name;
+      document.getElementById('creator-avatar').innerText = creator.display_name.charAt(0).toUpperCase();
+      document.getElementById('creator-method-badge').innerText = creator.payment_method.toUpperCase();
+    }
+
+    function renderCreatorDashboard(creator) {
+      document.getElementById('tipper-view').classList.add('hidden');
+      document.getElementById('creator-view').classList.remove('hidden');
+
+      document.getElementById('dashboard-name').innerText = creator.display_name;
+      document.getElementById('dashboard-avatar').innerText = creator.display_name.charAt(0).toUpperCase();
+      document.getElementById('dashboard-method').innerText = creator.payment_method.toUpperCase();
+      document.getElementById('stat-total-earned').innerText = creator.total_earned.toFixed(2) + " ETB";
+      document.getElementById('stat-total-count').innerText = creator.total_count;
+
+      // Render QR Code
+      const qrWrap = document.getElementById('qrcode-container');
+      qrWrap.innerHTML = "";
+      new QRCode(qrWrap, {
+        text: creator.deep_link,
+        width: 160,
+        height: 160,
+      });
+
+      // Render Recent Tips
+      const listWrap = document.getElementById('recent-tips-list');
+      if (creator.recent_tips && creator.recent_tips.length > 0) {
+        listWrap.innerHTML = creator.recent_tips.map(t => `
+          <div class="tip-item">
+            <div>
+              <div style="font-weight:700; font-size:14px;">${t.tipper_name}</div>
+              ${t.note ? `<div style="font-size:12px; color:var(--hint-color); margin-top:2px;">"${t.note}"</div>` : ''}
+              <div style="font-size:11px; color:var(--hint-color); font-family:monospace; margin-top:2px;">${t.date}</div>
+            </div>
+            <div style="font-weight:800; color:var(--gold-color);">${t.amount} ETB</div>
+          </div>
+        `).join('');
+      }
+    }
+
+    function selectAmount(amt) {
+      const chips = document.querySelectorAll('.amount-chip');
+      chips.forEach(c => c.classList.remove('active'));
+
+      if (amt === 'custom') {
+        document.getElementById('custom-amount-wrap').classList.remove('hidden');
+        selectedTipAmount = parseFloat(document.getElementById('custom-amount-input').value) || 0;
+      } else {
+        document.getElementById('custom-amount-wrap').classList.add('hidden');
+        selectedTipAmount = amt;
+      }
+      updatePayButtonText();
+    }
+
+    function updateCustomAmount(val) {
+      selectedTipAmount = parseFloat(val) || 0;
+      updatePayButtonText();
+    }
+
+    function updatePayButtonText() {
+      const btn = document.getElementById('btn-pay-trigger');
+      btn.innerText = `🎁 Tip ${selectedTipAmount > 0 ? selectedTipAmount + ' ETB' : ''}`;
+    }
+
+    async function startTipSession() {
+      if (!selectedTipAmount || selectedTipAmount < 5) {
+        alert("Minimum tip amount is 5 Birr.");
+        return;
+      }
+
+      const note = document.getElementById('tip-note-input').value;
+      const tgUser = tg?.initDataUnsafe?.user;
+
+      const payload = {
+        creator_id: currentCreatorData.id,
+        amount: selectedTipAmount,
+        note: note || null,
+        tipper_telegram_id: tgUser ? tgUser.id : null,
+        tipper_display_name: tgUser ? (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) : "Anonymous"
+      };
+
+      try {
+        const res = await fetch('/api/tip/initialize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          activeTipId = data.tip_id;
+
+          // Render Payment Instructions Sheet
+          document.getElementById('step-select-amount').classList.add('hidden');
+          const sheet = document.getElementById('step-payment-sheet');
+          sheet.classList.add('active');
+
+          const method = data.payment_method.toUpperCase();
+          document.getElementById('pay-sheet-title').innerText = `${method} Payment Details`;
+          document.getElementById('sheet-recipient-name').innerText = data.account_name;
+          document.getElementById('sheet-acc-label').innerText = method === 'TELEBIRR' ? 'Telebirr Phone' : 'CBE Account';
+          document.getElementById('sheet-account-num').innerText = data.account_number;
+          document.getElementById('sheet-amount').innerText = `${data.amount} ETB`;
+          document.getElementById('sheet-ref-code').innerText = data.tx_ref;
+          document.getElementById('sheet-ussd-code').innerText = data.ussd_code;
+        } else {
+          alert("Failed to initialize tip session.");
+        }
+      } catch (err) {
+        console.error("Tip initialization error:", err);
+      }
+    }
+
+    function copyAccountNum() {
+      const num = document.getElementById('sheet-account-num').innerText;
+      navigator.clipboard.writeText(num);
+      alert("Account number copied to clipboard!");
+    }
+
+    async function submitPaymentClaim() {
+      const refCode = document.getElementById('receipt-ref-input').value.trim();
+      if (!refCode) {
+        alert("Please enter your SMS receipt reference code.");
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/tip/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tip_id: activeTipId, ref_code: refCode })
+        });
+
+        if (res.ok) {
+          alert("✅ Payment receipt submitted! We have notified the creator to verify your tip.");
+          if (tg) tg.close();
+        } else {
+          alert("Failed to submit receipt code. Please try again.");
+        }
+      } catch (err) {
+        console.error("Payment claim error:", err);
+      }
+    }
+
+    window.onload = initApp;
+  </script>
+</body>
+</html>
