@@ -10,6 +10,7 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     InlineQueryHandler,
+    PicklePersistence,
     filters,
 )
 from telegram.request import HTTPXRequest
@@ -62,12 +63,14 @@ async def post_init_setup(application: Application) -> None:
 
 
 def build_telegram_application() -> Application:
-    """Build and configure python-telegram-bot Application instance."""
+    """Build and configure python-telegram-bot Application instance with persistence."""
+    persistence = PicklePersistence(filepath="bot_persistence.pickle")
     request_config = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0, pool_timeout=30.0)
     app = (
         ApplicationBuilder()
         .token(settings.bot_token)
         .request(request_config)
+        .persistence(persistence)
         .post_init(post_init_setup)
         .build()
     )
@@ -93,6 +96,8 @@ def build_telegram_application() -> Application:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_registration)],
+        name="registration_conv",
+        persistent=True,
         per_message=False,
     )
 
