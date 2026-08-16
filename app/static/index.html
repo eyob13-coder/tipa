@@ -16,9 +16,9 @@
       --text-color: var(--tg-theme-text-color, #f8fafc);
       --hint-color: var(--tg-theme-hint-color, #94a3b8);
       --link-color: var(--tg-theme-link-color, #38bdf8);
-      --button-color: var(--tg-theme-button-color, #6366f1);
+      --button-color: var(--tg-theme-button-color, #3b82f6);
       --button-text: var(--tg-theme-button-text-color, #ffffff);
-      --accent-glow: rgba(99, 102, 241, 0.3);
+      --accent-glow: rgba(59, 130, 246, 0.3);
       --card-border: rgba(255, 255, 255, 0.08);
       --gold-color: #f59e0b;
       --success-color: #10b981;
@@ -93,7 +93,7 @@
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -192,7 +192,7 @@
     /* Primary Action Button */
     .btn-primary {
       width: 100%;
-      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
       color: var(--button-text);
       border: none;
       border-radius: 14px;
@@ -463,7 +463,9 @@
       }
 
       try {
-        const res = await fetch(`/api/creator/${userIdentifier}`);
+        const res = await fetch(`/api/creator/${userIdentifier}`, {
+          headers: { 'X-Telegram-Init-Data': tg?.initData || '' }
+        });
         if (res.ok) {
           currentCreatorData = await res.json();
 
@@ -591,7 +593,7 @@
       try {
         const res = await fetch('/api/tip/initialize', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': tg?.initData || '' },
           body: JSON.stringify(payload)
         });
 
@@ -607,7 +609,7 @@
           const method = data.payment_method.toUpperCase();
           document.getElementById('pay-sheet-title').innerText = `${method} Payment Details`;
           document.getElementById('sheet-recipient-name').innerText = data.account_name;
-          document.getElementById('sheet-acc-label').innerText = method === 'TELEBIRR' ? 'Telebirr Phone' : 'CBE Account';
+          document.getElementById('sheet-acc-label').innerText = data.account_label || 'Account';
           document.getElementById('sheet-account-num').innerText = data.account_number;
           document.getElementById('sheet-amount').innerText = `${data.amount} ETB`;
           document.getElementById('sheet-ref-code').innerText = data.tx_ref;
@@ -636,12 +638,17 @@
       try {
         const res = await fetch('/api/tip/claim', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': tg?.initData || '' },
           body: JSON.stringify({ tip_id: activeTipId, ref_code: refCode })
         });
 
         if (res.ok) {
-          alert("✅ Payment receipt submitted! We have notified the creator to verify your tip.");
+          const data = await res.json();
+          if (data.verified) {
+            alert("✅ Payment verified! Your tip has been confirmed and the creator notified.");
+          } else {
+            alert("✅ Payment receipt submitted! We have notified the creator to verify your tip.");
+          }
           if (tg) tg.close();
         } else {
           alert("Failed to submit receipt code. Please try again.");

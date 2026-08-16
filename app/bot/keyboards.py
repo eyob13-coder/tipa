@@ -1,50 +1,17 @@
-from typing import List, Dict, Any
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from app.payment_methods import PAYMENT_METHODS, PaymentMethod, get_method
 
 
 def get_payment_method_selection_keyboard() -> InlineKeyboardMarkup:
-    """Select preferred receiving payment method for creators (Telebirr or CBE)."""
-    keyboard = [
-        [
-            InlineKeyboardButton("📱 Telebirr (Phone Number)", callback_data="method_select:telebirr"),
-        ],
-        [
-            InlineKeyboardButton("🏦 CBE / Commercial Bank of Ethiopia", callback_data="method_select:cbe"),
-        ],
-        [
-            InlineKeyboardButton("❌ Cancel Registration", callback_data="reg_cancel"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_bank_selection_keyboard(banks: List[Dict[str, Any]], page: int = 0, page_size: int = 5) -> InlineKeyboardMarkup:
-    """Build a paginated inline keyboard for choosing a bank."""
-    total_banks = len(banks)
-    start_idx = page * page_size
-    end_idx = min(start_idx + page_size, total_banks)
-    current_banks = banks[start_idx:end_idx]
-
+    """Select preferred receiving payment method for creators (mobile wallets & banks)."""
     keyboard = []
-    for bank in current_banks:
-        code = str(bank.get("code") or bank.get("id"))
-        name = bank.get("name", f"Bank {code}")
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"bank_select:{code}:{name}")])
-
-    # Navigation row
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"bank_page:{page - 1}"))
-    page_count = (total_banks + page_size - 1) // page_size
-    if page_count > 1:
-        nav_row.append(InlineKeyboardButton(f"{page + 1}/{page_count}", callback_data="bank_noop"))
-    if end_idx < total_banks:
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"bank_page:{page + 1}"))
-
-    if nav_row:
-        keyboard.append(nav_row)
-
-    keyboard.append([InlineKeyboardButton("⬅️ Back to Payment Methods", callback_data="back_to_methods")])
+    for method in PAYMENT_METHODS.values():
+        emoji = "📱" if method.kind == "mobile" else "🏦"
+        keyboard.append(
+            [InlineKeyboardButton(f"{emoji} {method.name}", callback_data=f"method_select:{method.code}")]
+        )
+    keyboard.append([InlineKeyboardButton("❌ Cancel Registration", callback_data="reg_cancel")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -85,53 +52,16 @@ def get_tip_note_prompt_keyboard(creator_id: str, amount: float) -> InlineKeyboa
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_telebirr_transfer_keyboard(tip_id: str) -> InlineKeyboardMarkup:
-    """Buttons for Telebirr payment with app store links & payment confirmation."""
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "📱 Open Telebirr App (Android)",
-                url="https://play.google.com/store/apps/details?id=cn.tydic.ethiopay",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "📱 Open Telebirr App (iPhone)",
-                url="https://apps.apple.com/us/app/telebirr/id1553601084",
-            ),
-        ],
-        [
-            InlineKeyboardButton("✅ I Have Sent the Payment", callback_data=f"tip_sent:{tip_id}"),
-        ],
-        [
-            InlineKeyboardButton("❌ Cancel Tip", callback_data="tip_cancel"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_cbe_transfer_keyboard(tip_id: str) -> InlineKeyboardMarkup:
-    """Buttons for CBE payment with app store links & payment confirmation."""
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "📱 Open CBE Birr App (Android)",
-                url="https://play.google.com/store/apps/details?id=prod.cbe.birr",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "📱 Open CBE Birr App (iPhone)",
-                url="https://apps.apple.com/us/app/cbebirr-plus/id1600841787",
-            ),
-        ],
-        [
-            InlineKeyboardButton("✅ I Have Sent the Payment", callback_data=f"tip_sent:{tip_id}"),
-        ],
-        [
-            InlineKeyboardButton("❌ Cancel Tip", callback_data="tip_cancel"),
-        ],
-    ]
+def get_transfer_keyboard(method_code: str, tip_id: str) -> InlineKeyboardMarkup:
+    """Buttons for a payment method transfer: app links & payment confirmation."""
+    method: PaymentMethod = get_method(method_code) or get_method("telebirr")
+    keyboard = []
+    if method.android_url:
+        keyboard.append([InlineKeyboardButton("📱 Open Android App", url=method.android_url)])
+    if method.ios_url:
+        keyboard.append([InlineKeyboardButton("📱 Open iPhone App", url=method.ios_url)])
+    keyboard.append([InlineKeyboardButton("✅ I Have Sent the Payment", callback_data=f"tip_sent:{tip_id}")])
+    keyboard.append([InlineKeyboardButton("❌ Cancel Tip", callback_data="tip_cancel")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -142,19 +72,6 @@ def get_creator_approval_keyboard(tip_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("✅ Approve Tip", callback_data=f"approve_tip:{tip_id}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"reject_tip:{tip_id}"),
         ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_payment_link_keyboard(checkout_url: str, amount: float, creator_name: str) -> InlineKeyboardMarkup:
-    """Build checkout button for Chapa payment."""
-    keyboard = [
-        [
-            InlineKeyboardButton(f"💳 Pay {amount:g} ETB Tip for {creator_name}", url=checkout_url)
-        ],
-        [
-            InlineKeyboardButton("❌ Cancel Tip", callback_data="tip_cancel"),
-        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 

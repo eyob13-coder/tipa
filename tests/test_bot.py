@@ -7,46 +7,27 @@ from telegram import Chat, Message, Update
 import app.bot.handlers as handlers
 from app.bot.keyboards import (
     get_payment_method_selection_keyboard,
-    get_bank_selection_keyboard,
     get_tip_amount_keyboard,
     get_tip_note_prompt_keyboard,
-    get_payment_link_keyboard,
     get_channel_post_button,
-    get_telebirr_transfer_keyboard,
-    get_cbe_transfer_keyboard,
+    get_transfer_keyboard,
 )
 from app.db.base import Base
 from app.db.models import Creator
+from app.payment_methods import PAYMENT_METHODS
 
 
 def test_payment_method_selection_keyboard():
     kb = get_payment_method_selection_keyboard()
-    assert len(kb.inline_keyboard) == 3
-    assert kb.inline_keyboard[0][0].text == "📱 Telebirr (Phone Number)"
-    assert kb.inline_keyboard[1][0].text == "🏦 CBE / Commercial Bank of Ethiopia"
-    assert kb.inline_keyboard[2][0].text == "❌ Cancel Registration"
-
-
-def test_bank_selection_keyboard_pagination():
-    banks = [
-        {"id": 856, "name": "Abay Bank", "code": "856"},
-        {"id": 857, "name": "Addis International Bank", "code": "857"},
-        {"id": 858, "name": "Awash Bank", "code": "858"},
-        {"id": 859, "name": "Bank of Abyssinia", "code": "859"},
-        {"id": 860, "name": "Berhan Bank", "code": "860"},
-        {"id": 861, "name": "CBE", "code": "861"},
-        {"id": 862, "name": "Dashen Bank", "code": "862"},
-    ]
-
-    kb_page0 = get_bank_selection_keyboard(banks, page=0, page_size=5)
-    # 5 bank rows + 1 pagination row + 1 back row
-    assert len(kb_page0.inline_keyboard) == 7
-    assert kb_page0.inline_keyboard[0][0].text == "Abay Bank"
-
-    kb_page1 = get_bank_selection_keyboard(banks, page=1, page_size=5)
-    # 2 bank rows + 1 pagination row + 1 back row
-    assert len(kb_page1.inline_keyboard) == 4
-    assert kb_page1.inline_keyboard[0][0].text == "CBE"
+    rows = kb.inline_keyboard
+    assert len(rows) == len(PAYMENT_METHODS) + 1
+    texts = [row[0].text for row in rows]
+    for code, method in PAYMENT_METHODS.items():
+        emoji = "📱" if method.kind == "mobile" else "🏦"
+        assert f"{emoji} {method.name}" in texts
+        row = next((r for r in rows if r[0].callback_data == f"method_select:{code}"), None)
+        assert row is not None, f"missing method_select button for {code}"
+    assert rows[-1][0].text == "❌ Cancel Registration"
 
 
 def test_tip_amount_keyboard():
@@ -70,16 +51,6 @@ def test_tip_note_prompt_keyboard():
     assert "Back to Amounts" in kb.inline_keyboard[2][0].text
 
 
-def test_payment_link_keyboard():
-    url = "https://checkout.chapa.co/test"
-    kb = get_payment_link_keyboard(url, 50.0, "Amanuel")
-    # pay link row + cancel row
-    assert len(kb.inline_keyboard) == 2
-    assert kb.inline_keyboard[0][0].url == url
-    assert "50 ETB" in kb.inline_keyboard[0][0].text
-    assert kb.inline_keyboard[1][0].text == "❌ Cancel Tip"
-
-
 def test_channel_post_button():
     kb = get_channel_post_button("TipaPayBot", "creator-uuid-123")
     assert len(kb.inline_keyboard) == 1
@@ -92,8 +63,8 @@ def test_channel_post_button_with_post_id():
     assert kb.inline_keyboard[0][0].url == "https://t.me/TipaPayBot?start=tip_creator-uuid-123_post_42"
 
 
-def test_telebirr_transfer_keyboard_urls_are_valid():
-    kb = get_telebirr_transfer_keyboard("tip-1")
+def test_transfer_keyboard_urls_are_valid():
+    kb = get_transfer_keyboard("telebirr", "tip-1")
     urls = [btn.url for row in kb.inline_keyboard for btn in row if btn.url]
     assert len(urls) == 2
     for url in urls:
@@ -102,7 +73,7 @@ def test_telebirr_transfer_keyboard_urls_are_valid():
 
 
 def test_cbe_transfer_keyboard_urls_are_valid():
-    kb = get_cbe_transfer_keyboard("tip-1")
+    kb = get_transfer_keyboard("cbe", "tip-1")
     urls = [btn.url for row in kb.inline_keyboard for btn in row if btn.url]
     assert len(urls) == 2
     for url in urls:
@@ -140,7 +111,6 @@ async def test_auto_channel_post_handler_attaches_correct_button(monkeypatch):
         payment_method="telebirr",
         account_number="0911223344",
         account_name="Lehava",
-        chapa_subaccount_id="manual_1053005565",
         channel_id="-1001896209701",
     )
     async with session_factory() as session:
@@ -181,7 +151,6 @@ async def test_auto_channel_post_handler_skips_unlinked_channel(monkeypatch):
         payment_method="telebirr",
         account_number="0911223344",
         account_name="Nobody",
-        chapa_subaccount_id="manual_999",
         channel_id="-100999",
     )
     async with session_factory() as session:

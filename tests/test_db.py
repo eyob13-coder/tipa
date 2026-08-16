@@ -14,7 +14,6 @@ async def test_create_creator_and_tip(db_session):
         bank_code=861,
         account_number="1000123456789",
         account_name="Test Creator Name",
-        chapa_subaccount_id="ACCT_sub_123456",
     )
     db_session.add(creator)
     await db_session.commit()
@@ -30,7 +29,7 @@ async def test_create_creator_and_tip(db_session):
         tipper_display_name="Amanuel",
         amount=Decimal("50.00"),
         platform_fee=Decimal("2.00"),
-        chapa_tx_ref="tipa_tx_test_123",
+        tx_ref="tipa_tx_test_123",
         status="pending",
         note="Keep up the awesome tech content! 🔥",
     )

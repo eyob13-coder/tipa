@@ -1,10 +1,16 @@
 import uuid
 import hmac
 import hashlib
+import io
+import json
+import csv
+import time
 import urllib.parse
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, desc
 
@@ -13,6 +19,15 @@ from app.db.session import AsyncSessionLocal
 from app.db.models import Creator, Tip
 from app.bot.bot import get_telegram_application
 from app.bot.keyboards import get_creator_approval_keyboard
+from app.payment_methods import (
+    account_label_for,
+    deep_link_for,
+    get_method,
+    method_name,
+    ussd_code_for,
+)
+from app.verify.service import auto_verify_tip
+from app.bot.notifications import notify_tip_success
 
 
 def validate_telegram_init_data(init_data: str) -> bool:
@@ -33,6 +48,51 @@ def validate_telegram_init_data(init_data: str) -> bool:
         return False
 
 
+def parse_init_data_user(init_data: str) -> Optional[int]:
+    """Return the verified Telegram user id from initData, or None."""
+    if not init_data or not validate_telegram_init_data(init_data):
+        return None
+    try:
+        parsed_data = dict(urllib.parse.parse_qsl(init_data))
+        user = parsed_data.get("user")
+        if not user:
+            return None
+        return int(json.loads(user).get("id"))
+    except Exception:
+        return None
+
+
+def require_valid_init_data(x_telegram_init_data: str = Header(default="")) -> str:
+    """Dependency: reject Mini App calls that don't carry valid Telegram initData.
+
+    When ``BOT_TOKEN`` is unset (local dev / CI) validation is skipped so the
+    app stays runnable outside Telegram; in production every /api call must be
+    signed by Telegram.
+    """
+    if not settings.bot_token:
+        return x_telegram_init_data
+    if not validate_telegram_init_data(x_telegram_init_data):
+        raise HTTPException(status_code=401, detail="Missing or invalid Telegram initData")
+    return x_telegram_init_data
+
+
+CLAIM_RATE_LIMIT = 10
+CLAIM_RATE_WINDOW_SECONDS = 60.0
+_claim_windows: "dict[str, deque[float]]" = defaultdict(deque)
+
+
+def limit_claim_rate(request: Request) -> None:
+    """Dependency: sliding-window rate limit on the claim endpoint per client IP."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    window = _claim_windows[client_ip]
+    while window and now - window[0] > CLAIM_RATE_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= CLAIM_RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many claims. Please try again later.")
+    window.append(now)
+
+
 router = APIRouter(prefix="/api", tags=["miniapp"])
 
 
@@ -51,7 +111,7 @@ class TipClaimRequest(BaseModel):
 
 
 @router.get("/creator/{identifier}")
-async def get_creator_profile(identifier: str):
+async def get_creator_profile(identifier: str, _init_data: str = Depends(require_valid_init_data)):
     """Fetch creator profile & stats by UUID or Telegram ID."""
     async with AsyncSessionLocal() as session:
         # Try UUID first, then Telegram ID
@@ -124,8 +184,68 @@ async def get_creator_profile(identifier: str):
         }
 
 
+@router.get("/creator/{identifier}/export")
+async def export_creator_tips_csv(
+    identifier: str,
+    init_data: str = Depends(require_valid_init_data),
+):
+    """Export a creator's verified tip history as CSV (reconciliation trail)."""
+    async with AsyncSessionLocal() as session:
+        creator = None
+        try:
+            creator_uuid = uuid.UUID(identifier)
+            stmt = select(Creator).where(Creator.id == creator_uuid)
+            res = await session.execute(stmt)
+            creator = res.scalar_one_or_none()
+        except ValueError:
+            pass
+
+        if not creator and identifier.isdigit():
+            stmt = select(Creator).where(Creator.telegram_id == int(identifier))
+            res = await session.execute(stmt)
+            creator = res.scalar_one_or_none()
+
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+
+        telegram_user_id = parse_init_data_user(init_data)
+        if telegram_user_id is None or telegram_user_id != creator.telegram_id:
+            raise HTTPException(status_code=403, detail="You can only export your own tips")
+
+        stmt = (
+            select(Tip)
+            .where(Tip.creator_id == creator.id, Tip.status == "success")
+            .order_by(desc(Tip.verified_at), desc(Tip.created_at))
+        )
+        res = await session.execute(stmt)
+        tips = res.scalars().all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["date", "tipper_name", "amount_etb", "note", "verification_method", "tx_ref"])
+    for tip in tips:
+        writer.writerow(
+            [
+                (tip.verified_at or tip.created_at).strftime("%Y-%m-%d %H:%M"),
+                tip.tipper_display_name or "Anonymous",
+                f"{float(tip.amount):.2f}",
+                tip.note or "",
+                tip.verification_method or "",
+                tip.tx_ref,
+            ]
+        )
+    buffer.seek(0)
+
+    filename = f"tipa_{creator.telegram_id}_tips.csv"
+    return StreamingResponse(
+        buffer,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/tip/initialize")
-async def initialize_tip(req: TipInitRequest):
+async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_valid_init_data)):
     """Initialize tip session from Mini App."""
     try:
         creator_uuid = uuid.UUID(req.creator_id)
@@ -147,7 +267,7 @@ async def initialize_tip(req: TipInitRequest):
             tipper_display_name=req.tipper_display_name or "Anonymous",
             amount=req.amount,
             platform_fee=settings.platform_fee_birr,
-            chapa_tx_ref=tx_ref,
+            tx_ref=tx_ref,
             status="pending",
             note=req.note,
             post_id=req.post_id,
@@ -157,8 +277,7 @@ async def initialize_tip(req: TipInitRequest):
         await session.refresh(tip)
 
         method = creator.payment_method
-        ussd_code = "*127#" if method == "telebirr" else "*847#"
-        deep_link_url = "https://www.ethiotelecom.et/telebirr/" if method == "telebirr" else "https://www.combanketh.et/"
+        method_info = get_method(method)
 
         return {
             "tip_id": str(tip.id),
@@ -167,15 +286,21 @@ async def initialize_tip(req: TipInitRequest):
             "note": req.note,
             "creator_name": creator.display_name,
             "payment_method": method,
+            "payment_method_name": method_info.name if method_info else method.upper(),
             "account_number": creator.account_number,
             "account_name": creator.account_name,
-            "ussd_code": ussd_code,
-            "deep_link_url": deep_link_url,
+            "account_label": account_label_for(method),
+            "ussd_code": ussd_code_for(method),
+            "deep_link_url": deep_link_for(method),
         }
 
 
 @router.post("/tip/claim")
-async def claim_tip_payment(req: TipClaimRequest):
+async def claim_tip_payment(
+    req: TipClaimRequest,
+    _init_data: str = Depends(require_valid_init_data),
+    _rate_limited: None = Depends(limit_claim_rate),
+):
     """Claim payment sent with SMS/receipt reference code from Mini App."""
     try:
         tip_uuid = uuid.UUID(req.tip_id)
@@ -197,9 +322,38 @@ async def claim_tip_payment(req: TipClaimRequest):
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
 
-        tip.status = "pending_verification"
-        tip.chapa_ref_id = req.ref_code
+        dup_stmt = (
+            select(Tip.id)
+            .where(
+                Tip.ref_id == req.ref_code,
+                Tip.id != tip.id,
+                Tip.status.in_(["pending", "pending_verification", "success"]),
+            )
+            .limit(1)
+        )
+        dup_res = await session.execute(dup_stmt)
+        if dup_res.first() is not None:
+            raise HTTPException(status_code=409, detail="This reference code was already used for another tip")
+
+        tip.ref_id = req.ref_code
         tip.claimed_at = datetime.now(timezone.utc)
+        await session.commit()
+
+        verify_result = await auto_verify_tip(session, tip, creator, req.ref_code)
+
+        if verify_result is not None and verify_result.verified:
+            try:
+                await notify_tip_success(str(tip.id))
+            except Exception:
+                pass
+            return {
+                "status": "ok",
+                "verified": True,
+                "message": "Tip payment verified successfully",
+                "amount": float(tip.amount),
+            }
+
+        tip.status = "pending_verification"
         await session.commit()
 
     # Send 1-tap approval notification to Creator DM
@@ -207,14 +361,14 @@ async def claim_tip_payment(req: TipClaimRequest):
         bot_app = get_telegram_application()
         tipper_name = tip.tipper_display_name or "A follower"
         note_str = f"\n💬 **Note:** *\"{tip.note}\"*\n" if tip.note else ""
-        method_name = creator.payment_method.upper()
+        method_str = method_name(creator.payment_method)
 
         msg = (
-            f"💸 **New Tip Claimed via Mini App ({method_name})!**\n\n"
+            f"💸 **New Tip Claimed via Mini App ({method_str})!**\n\n"
             f"**{tipper_name}** claims they sent **{float(tip.amount):g} ETB** to your `{creator.account_number}`.\n"
             f"Receipt / Ref Code: `{req.ref_code}`\n"
             f"{note_str}\n"
-            f"Please check your {method_name} app and tap **Approve Tip** below to confirm:"
+            f"Please check your {method_str} app and tap **Approve Tip** below to confirm:"
         )
 
         approval_kb = get_creator_approval_keyboard(str(tip.id))
@@ -227,4 +381,4 @@ async def claim_tip_payment(req: TipClaimRequest):
     except Exception:
         pass
 
-    return {"status": "ok", "message": "Payment claim submitted successfully"}
+    return {"status": "ok", "verified": False, "message": "Payment claim submitted for creator approval"}

@@ -21,7 +21,6 @@ from app.bot.handlers import (
     help_command,
     register_start,
     payment_method_callback,
-    bank_pagination_callback,
     account_number_received,
     account_name_received,
     channel_link_received,
@@ -36,7 +35,6 @@ from app.bot.handlers import (
     addchannel_command,
     receipt_photo_handler,
     METHOD_CHOICE,
-    BANK_CHOICE,
     ACCOUNT_NUM,
     ACCOUNT_NAME,
     CHANNEL_LINK,
@@ -52,7 +50,7 @@ async def post_init_setup(application: Application) -> None:
     """Register bot commands menu with Telegram on startup."""
     commands = [
         BotCommand("start", "Start Tipa & view tipping link"),
-        BotCommand("register", "Link Telebirr, CBE, or Chapa account"),
+        BotCommand("register", "Link your payment method (mobile money / bank)"),
         BotCommand("post", "Generate channel post & tip button"),
         BotCommand("mytips", "View total earnings & tips history"),
         BotCommand("help", "Command guide & instructions"),
@@ -78,15 +76,12 @@ def build_telegram_application() -> Application:
         .build()
     )
 
-    # /register ConversationHandler (Telebirr / CBE / Chapa)
+    # /register ConversationHandler (Telebirr / CBE)
     registration_conv = ConversationHandler(
         entry_points=[CommandHandler("register", register_start)],
         states={
             METHOD_CHOICE: [
                 CallbackQueryHandler(payment_method_callback, pattern=r"^(method_select:|back_to_methods$)"),
-            ],
-            BANK_CHOICE: [
-                CallbackQueryHandler(bank_pagination_callback, pattern=r"^(bank_|back_to_methods$)"),
             ],
             ACCOUNT_NUM: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, account_number_received),

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -64,10 +65,9 @@ class Creator(Base):
     telegram_username: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     bank_code: Mapped[int] = mapped_column(Integer, nullable=False, default=861)
-    payment_method: Mapped[str] = mapped_column(String, nullable=False, default="cbe")  # 'cbe' | 'telebirr' | 'chapa'
+    payment_method: Mapped[str] = mapped_column(String, nullable=False, default="cbe")  # 'cbe' | 'telebirr'
     account_number: Mapped[str] = mapped_column(String, nullable=False)
     account_name: Mapped[str] = mapped_column(String, nullable=False)
-    chapa_subaccount_id: Mapped[str] = mapped_column(String, nullable=False)
     channel_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -93,13 +93,15 @@ class Tip(Base):
     )
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     platform_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    chapa_tx_ref: Mapped[str] = mapped_column(
+    tx_ref: Mapped[str] = mapped_column(
         String, unique=True, nullable=False, index=True
     )
-    chapa_ref_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ref_id: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, unique=True, index=True
+    )
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending"
-    )  # 'pending' | 'success' | 'failed'
+    )  # 'pending' | 'pending_verification' | 'success' | 'failed'
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     post_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     claimed_at: Mapped[Optional[datetime]] = mapped_column(
@@ -114,5 +116,32 @@ class Tip(Base):
     verified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    verification_method: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )  # provider name ('verify_et' | 'check_et' | 'justverify') | 'creator_approval'
+    verified_amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="tips")
+
+
+class VerificationLog(Base):
+    """Append-only audit trail of every verification attempt on a tip."""
+
+    __tablename__ = "verification_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tip_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tips.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    amount: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    tip: Mapped["Tip"] = relationship("Tip")

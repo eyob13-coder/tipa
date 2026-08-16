@@ -43,7 +43,6 @@ def _creator(telegram_id=111):
         payment_method="telebirr",
         account_number="0911223344",
         account_name="Creator One",
-        chapa_subaccount_id="manual_111",
         channel_id="-100111",
     )
 
@@ -61,7 +60,7 @@ async def test_young_claim_is_untouched(monkeypatch):
         tipper_display_name="Tipper",
         amount=10,
         platform_fee=0,
-        chapa_tx_ref="tipa_young",
+        tx_ref="tipa_young",
         status="pending_verification",
         claimed_at=now - timedelta(hours=2),
     )
@@ -96,8 +95,8 @@ async def test_claim_gets_reminder_once(monkeypatch):
         tipper_display_name="Tipper",
         amount=10,
         platform_fee=0,
-        chapa_tx_ref="tipa_remind",
-        chapa_ref_id="REF123",
+        tx_ref="tipa_remind",
+        ref_id="REF123",
         status="pending_verification",
         claimed_at=now - timedelta(hours=30),
     )
@@ -145,8 +144,8 @@ async def test_expired_claim_fails_and_notifies_both(monkeypatch):
         tipper_display_name="Tipper",
         amount=20,
         platform_fee=0,
-        chapa_tx_ref="tipa_expire",
-        chapa_ref_id="REF456",
+        tx_ref="tipa_expire",
+        ref_id="REF456",
         status="pending_verification",
         claimed_at=now - timedelta(hours=80),
     )

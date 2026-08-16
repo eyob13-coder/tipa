@@ -6,9 +6,13 @@ load_dotenv()
 
 class Settings(BaseSettings):
     bot_token: str = ""
-    chapa_secret_key: str = "CHASECK_TEST-sandbox_secret_key"
+    verify_et_api_key: str = ""
+    verify_et_base_url: str = "https://verify.et"
+    check_et_api_key: str = ""
+    check_et_base_url: str = "https://api.check.et/api/v1"
+    justverify_api_key: str = ""
+    justverify_base_url: str = "https://justverify.et"
     database_url: str = "sqlite+aiosqlite:///./tipa.db"
-    webhook_base_url: str = "http://localhost:8000"
     platform_fee_birr: float = 0.0
     bot_username: str = "TipaPayBot"
     tip_reminder_hours: float = 24.0

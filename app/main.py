@@ -1,18 +1,17 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.db.session import init_db
-from app.chapa.client import chapa_client
+from app.db.session import init_db, AsyncSessionLocal
 from app.bot.bot import get_telegram_application
 from app.bot.reminders import run_tip_reminder_loop
-from app.webhooks.chapa_webhook import router as webhook_router
 from app.api.routes import router as api_router
 
 logging.basicConfig(
@@ -30,13 +29,6 @@ async def lifespan(app: FastAPI):
     global bot_task
     logger.info("Initializing database...")
     await init_db()
-
-    logger.info("Pre-caching bank list from Chapa...")
-    try:
-        banks = await asyncio.wait_for(chapa_client.list_banks(), timeout=3.0)
-        logger.info(f"Loaded {len(banks)} banks.")
-    except Exception as e:
-        logger.info(f"Using default offline bank list ({e})")
 
     # Initialize Telegram Bot
     if settings.bot_token and settings.bot_token != "sandbox_bot_token":
@@ -89,13 +81,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s -> %s (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
 # Mount static files
 static_path = BASE_DIR / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 app.include_router(api_router)
-app.include_router(webhook_router)
 
 
 @app.get("/")
@@ -112,6 +118,23 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness probe: verifies the database connection is alive."""
+    try:
+        from sqlalchemy import text
+
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ready", "database": "ok"}
+    except Exception as e:
+        logger.error("readiness check failed: %s", e)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "database": "error"},
+        )
 
 
 @app.get("/miniapp", response_class=FileResponse)

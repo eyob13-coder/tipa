@@ -24,24 +24,27 @@ from sqlalchemy import select, func, desc
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.db.models import Creator, Tip
-from app.chapa.client import chapa_client
 from app.bot.keyboards import (
     get_payment_method_selection_keyboard,
-    get_bank_selection_keyboard,
     get_tip_amount_keyboard,
     get_tip_note_prompt_keyboard,
-    get_telebirr_transfer_keyboard,
-    get_cbe_transfer_keyboard,
+    get_transfer_keyboard,
     get_creator_approval_keyboard,
-    get_payment_link_keyboard,
     get_confirm_registration_keyboard,
     get_channel_post_button,
 )
+from app.bot.notifications import notify_tip_success
+from app.payment_methods import (
+    get_method,
+    method_name,
+    ussd_code_for,
+)
+from app.verify.service import auto_verify_tip, log_verification_attempt
 
 logger = logging.getLogger(__name__)
 
 # Conversation states for registration
-METHOD_CHOICE, BANK_CHOICE, ACCOUNT_NUM, ACCOUNT_NAME, CHANNEL_LINK, CONFIRMATION = range(6)
+METHOD_CHOICE, ACCOUNT_NUM, ACCOUNT_NAME, CHANNEL_LINK, CONFIRMATION = range(5)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -74,11 +77,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 if post_id:
                     context.user_data["active_post_id"] = post_id
                 keyboard = get_tip_amount_keyboard(str(creator.id))
-                method_name = "Telebirr" if creator.payment_method == "telebirr" else ("CBE" if creator.payment_method == "cbe" else "Chapa")
+                method_str = method_name(creator.payment_method)
                 post_text = f" for post **#{post_id}**" if post_id else ""
                 await update.effective_message.reply_text(
                     f"🎁 **Tip {creator.display_name}**{post_text}\n"
-                    f"Payment Method: **{method_name}**\n\n"
+                    f"Payment Method: **{method_str}**\n\n"
                     f"Choose an amount below to tip directly in Birr (ETB):",
                     reply_markup=keyboard,
                     parse_mode="Markdown",
@@ -103,7 +106,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     bot_name = context.bot.username or settings.bot_username
     if existing_creator:
         deep_link = f"https://t.me/{bot_name}?start=tip_{existing_creator.id}"
-        method_str = existing_creator.payment_method.upper()
+        method_str = method_name(existing_creator.payment_method)
         await update.effective_message.reply_text(
             f"👋 Welcome back, **{existing_creator.display_name}**!\n"
             f"Active Payment Method: **{method_str}** (`{existing_creator.account_number}`)\n\n"
@@ -111,18 +114,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"📌 **Quick Actions:**\n"
             f"• `/post` — Generate channel post & 1-tap tip button\n"
             f"• `/mytips` — View your total earnings & supporter notes\n"
-            f"• `/register` — Update your Telebirr or CBE details\n"
+            f"• `/register` — Update your payment details\n"
             f"• `/help` — Detailed command guide",
             parse_mode="Markdown",
         )
     else:
         await update.effective_message.reply_text(
             f"🎁 **Welcome {user_name} to Tipa (@{bot_name})!**\n"
-            f"Telegram Tipping for Ethiopian Creators via Telebirr & CBE.\n\n"
+            f"Telegram Tipping for Ethiopian Creators via Mobile Money & Banks.\n\n"
             f"Tipa enables followers to tip channel creators directly in Ethiopian Birr (ETB). "
-            f"Funds flow directly to your Telebirr phone number or CBE bank account — 100% direct and transparent!\n\n"
+            f"Funds flow directly to your Telebirr phone number or bank account — 100% direct and transparent!\n\n"
             f"🚀 **How to Get Started (Takes 1 Minute):**\n"
-            f"1️⃣ Run `/register` to link your Telebirr or CBE account.\n"
+            f"1️⃣ Run `/register` to link your payment account.\n"
             f"2️⃣ Get your custom tipping deep link (`t.me/{bot_name}?start=tip_<your_id>`).\n"
             f"3️⃣ Run `/post` or type `@{bot_name}` to attach a tipping button to your channel posts!\n\n"
             f"👇 **Tap `/register` below to get started!**",
@@ -140,7 +143,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"📖 **Tipa Bot Command Guide & Help (@{bot_name})**\n\n"
         f"**Commands Overview (Tap any command to run):**\n\n"
         f"🚀 /start — Welcome screen & deep link handler. Tapping a creator's tip link starts the tipping flow.\n\n"
-        f"🏦 /register — Register or update your receiving payment method (**Telebirr**, **CBE**, or **Chapa**). Takes less than 1 minute!\n\n"
+        f"🏦 /register — Register or update your receiving payment method (mobile money or bank). Takes less than 1 minute!\n\n"
         f"📢 /addchannel — Link your Telegram channel for auto-tipping.\n\n"
         f"📢 /post — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
         f"📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
@@ -167,7 +170,7 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle payment method selection (telebirr, cbe, chapa) and back navigation."""
+    """Handle payment method selection and back navigation."""
     query = update.callback_query
     if not query or not query.data:
         return METHOD_CHOICE
@@ -185,90 +188,27 @@ async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_
         return METHOD_CHOICE
 
     if data.startswith("method_select:"):
-        method = data.split(":")[1]
-        context.user_data["selected_method"] = method
+        method_code = data.split(":")[1]
+        method = get_method(method_code)
+        if not method:
+            return METHOD_CHOICE
 
-        if method == "telebirr":
-            context.user_data["selected_bank_code"] = 869
-            context.user_data["selected_bank_name"] = "Telebirr"
-            await query.edit_message_text(
-                "📱 **Selected Method: Telebirr**\n\n"
-                "🔢 **Step 2/3: Enter your Telebirr Phone Number**\n"
-                "Please type and send your Telebirr registered phone number (e.g., `0911223344`):",
-                parse_mode="Markdown",
-            )
-            return ACCOUNT_NUM
+        context.user_data["selected_method"] = method.code
+        context.user_data["selected_bank_code"] = method.bank_code
+        context.user_data["selected_bank_name"] = method.name
 
-        elif method == "cbe":
-            context.user_data["selected_bank_code"] = 861
-            context.user_data["selected_bank_name"] = "Commercial Bank of Ethiopia (CBE)"
-            await query.edit_message_text(
-                "🏦 **Selected Method: CBE (Commercial Bank of Ethiopia)**\n\n"
-                "🔢 **Step 2/3: Enter your CBE Account Number**\n"
-                "Please type and send your 13-digit CBE account number (e.g., `1000123456789`):",
-                parse_mode="Markdown",
-            )
-            return ACCOUNT_NUM
-
-        elif method == "chapa":
-            banks = await chapa_client.list_banks()
-            keyboard = get_bank_selection_keyboard(banks, page=0)
-            context.user_data["reg_banks"] = banks
-            await query.edit_message_text(
-                "🏦 **Selected Method: Chapa Subaccount**\n\n"
-                "Select your bank for automated split payments:",
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-            return BANK_CHOICE
-
-    return METHOD_CHOICE
-
-
-async def bank_pagination_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle bank selection pagination callback for Chapa method."""
-    query = update.callback_query
-    if not query:
-        return BANK_CHOICE
-    await query.answer()
-
-    data = query.data or ""
-    if data == "bank_noop":
-        return BANK_CHOICE
-
-    if data == "back_to_methods":
-        keyboard = get_payment_method_selection_keyboard()
+        emoji = "📱" if method.kind == "mobile" else "🏦"
+        kind_text = "Phone Number" if method.kind == "mobile" else "Account Number"
+        example = "e.g., `0911223344`" if method.kind == "mobile" else "e.g., `1000123456789`"
         await query.edit_message_text(
-            "💳 **Step 1/3: Choose your Receiving Payment Method**\n"
-            "How would you like to receive tips from followers?",
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-        )
-        return METHOD_CHOICE
-
-    if data.startswith("bank_page:"):
-        page = int(data.split(":")[1])
-        banks = context.user_data.get("reg_banks") or await chapa_client.list_banks()
-        keyboard = get_bank_selection_keyboard(banks, page=page)
-        await query.edit_message_reply_markup(reply_markup=keyboard)
-        return BANK_CHOICE
-
-    if data.startswith("bank_select:"):
-        parts = data.split(":", 2)
-        bank_code = int(parts[1])
-        bank_name = parts[2]
-        context.user_data["selected_bank_code"] = bank_code
-        context.user_data["selected_bank_name"] = bank_name
-
-        await query.edit_message_text(
-            f"✅ Selected Bank: **{bank_name}**\n\n"
-            f"🔢 **Step 2/3: Enter your Account Number**\n"
-            f"Please type and send your bank account number:",
+            f"{emoji} **Selected Method: {method.name}**\n\n"
+            f"🔢 **Step 2/3: Enter your {kind_text}**\n"
+            f"Please type and send your {method.name} {kind_text.lower()} ({example}):",
             parse_mode="Markdown",
         )
         return ACCOUNT_NUM
 
-    return BANK_CHOICE
+    return METHOD_CHOICE
 
 
 async def account_number_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -282,11 +222,11 @@ async def account_number_received(update: Update, context: ContextTypes.DEFAULT_
         return ACCOUNT_NUM
 
     context.user_data["account_number"] = account_num
-    method = context.user_data.get("selected_method", "cbe")
-    label = "Telebirr Account Holder Name" if method == "telebirr" else "Bank Account Holder Name"
+    method = get_method(context.user_data.get("selected_method", "cbe"))
+    label = method.account_label if method else "Account"
 
     await update.effective_message.reply_text(
-        f"👤 **Step 3/3: {label}**\n"
+        f"👤 **Step 3/3: {label} Holder Name**\n"
         f"Please send the exact account holder name registered:",
         parse_mode="Markdown",
     )
@@ -351,8 +291,9 @@ async def channel_link_received(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def show_registration_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Present confirmation summary for creator registration."""
-    method = context.user_data.get("selected_method", "cbe").upper()
-    bank_name = context.user_data.get("selected_bank_name", "Bank")
+    method = get_method(context.user_data.get("selected_method", "cbe"))
+    method_code = method.code if method else "cbe"
+    bank_name = context.user_data.get("selected_bank_name", method.name if method else "Bank")
     account_num = context.user_data.get("account_number", "")
     account_name = context.user_data.get("account_name", "")
     channel_title = context.user_data.get("selected_channel_title", "None")
@@ -360,7 +301,7 @@ async def show_registration_confirmation(update: Update, context: ContextTypes.D
     keyboard = get_confirm_registration_keyboard()
     summary = (
         f"📋 **Registration Confirmation**\n\n"
-        f"💳 Payment Method: **{method}** ({bank_name})\n"
+        f"💳 Payment Method: **{method_code.upper()}** ({bank_name})\n"
         f"🔢 Account Number: `{account_num}`\n"
         f"👤 Account Holder: **{account_name}**\n"
         f"📢 Linked Channel: **{channel_title}**\n\n"
@@ -400,26 +341,15 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
         await query.edit_message_text("⏳ Saving registration details... Please wait.")
 
         user = query.from_user
-        method = context.user_data.get("selected_method", "cbe")
-        bank_code = context.user_data.get("selected_bank_code", 861)
+        method_code = context.user_data.get("selected_method", "cbe")
+        method = get_method(method_code)
+        bank_code = method.bank_code if method else 861
         account_num = context.user_data.get("account_number")
         account_name = context.user_data.get("account_name")
 
         display_name = user.first_name or "Creator"
         if user.last_name:
             display_name += f" {user.last_name}"
-
-        chapa_sub_id = f"manual_{user.id}"
-        if method == "chapa":
-            try:
-                chapa_sub_id = await chapa_client.create_subaccount(
-                    account_name=account_name,
-                    bank_code=bank_code,
-                    account_number=account_num,
-                    split_value=settings.platform_fee_birr,
-                )
-            except Exception as ce:
-                logger.warning(f"Chapa subaccount creation fallback to manual: {ce}")
 
         channel_id = context.user_data.get("selected_channel_id")
         async with AsyncSessionLocal() as session:
@@ -428,11 +358,10 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
             creator = res.scalar_one_or_none()
 
             if creator:
-                creator.payment_method = method
+                creator.payment_method = method_code
                 creator.bank_code = bank_code
                 creator.account_number = account_num
                 creator.account_name = account_name
-                creator.chapa_subaccount_id = chapa_sub_id
                 creator.display_name = display_name
                 creator.telegram_username = user.username
                 if channel_id:
@@ -443,10 +372,9 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
                     telegram_username=user.username,
                     display_name=display_name,
                     bank_code=bank_code,
-                    payment_method=method,
+                    payment_method=method_code,
                     account_number=account_num,
                     account_name=account_name,
-                    chapa_subaccount_id=chapa_sub_id,
                     channel_id=channel_id,
                 )
                 session.add(creator)
@@ -459,7 +387,7 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
 
         await query.edit_message_text(
             f"🎉 **Registration Successful!**\n\n"
-            f"Configured Payment Method: **{method.upper()}**\n\n"
+            f"Configured Payment Method: **{method_code.upper()}**\n\n"
             f"🔗 **Your Personal Tipping Deep Link:**\n`{deep_link}`\n\n"
             f"💡 **Pro Tip:** Run `/post` to get an inline tip button for your Telegram channel posts!",
             parse_mode="Markdown",
@@ -553,7 +481,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         await query.edit_message_text(
             "📝 **Payment Sent Confirmation**\n\n"
-            "Please send the transaction **Reference Number** / **SMS Code** (e.g., `TLB12345678` or `FT12345678`), **OR upload / paste a screenshot photo of your Telebirr / CBE payment receipt**! 📸",
+            "Please send the transaction **Reference Number** / **SMS Code** (e.g., `TLB12345678` or `FT12345678`), **OR upload / paste a screenshot photo of your payment receipt**! 📸",
             parse_mode="Markdown",
         )
 
@@ -567,7 +495,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def extract_ref_code_from_image(image_bytes: bytes) -> Optional[str]:
-    """Extract Telebirr or CBE transaction reference number from screenshot image bytes using OCR & Regex."""
+    """Extract a transaction reference number from a receipt screenshot image via OCR & regex."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         ocr_text = pytesseract.image_to_string(img)
@@ -649,7 +577,7 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
             await update.effective_message.reply_text(
                 "⚠️ **Invalid Reference / SMS Code Format**\n\n"
-                "Please enter a valid Telebirr (e.g. `TLB12345678`) or CBE (e.g. `FT12345678`) transaction reference code (at least 6 characters, no spaces or special symbols):",
+                "Please enter a valid transaction reference code (e.g. Telebirr `TLB12345678` or CBE `FT12345678`) with at least 6 characters, no spaces or special symbols:",
                 parse_mode="Markdown",
             )
             return
@@ -708,7 +636,7 @@ async def process_tip_initialization(
     note: Optional[str] = None,
     is_edit: bool = False,
 ) -> None:
-    """Initialize tip record and present payment instructions (Telebirr / CBE / Chapa)."""
+    """Initialize tip record and present payment instructions (Telebirr / CBE)."""
     try:
         creator_uuid = uuid.UUID(creator_id_str)
     except ValueError:
@@ -746,7 +674,7 @@ async def process_tip_initialization(
             tipper_display_name=tipper_name,
             amount=amount,
             platform_fee=settings.platform_fee_birr,
-            chapa_tx_ref=tx_ref,
+            tx_ref=tx_ref,
             status="pending",
             note=note,
             post_id=post_id,
@@ -755,70 +683,56 @@ async def process_tip_initialization(
         await session.commit()
         await session.refresh(tip_record)
 
-        method = creator.payment_method
+        method_code = creator.payment_method
+        method = get_method(method_code) or get_method("telebirr")
         note_display = f"\n💬 Note: *\"{note}\"*" if note else ""
+        ussd = ussd_code_for(method_code)
+        emoji = "📱" if method.kind == "mobile" else "🏦"
+        account_label = method.account_label or ("Phone" if method.kind == "mobile" else "Account Number")
 
-        if method == "chapa" and not creator.chapa_subaccount_id.startswith("manual_"):
-            try:
-                bot_username = context.bot.username or settings.bot_username
-                checkout_url = await chapa_client.initialize_transaction(
-                    amount=amount,
-                    creator_name=creator.display_name,
-                    subaccount_id=creator.chapa_subaccount_id,
-                    tx_ref=tx_ref,
-                    tipper_telegram_id=tipper_id,
-                    tipper_first_name=user.first_name if user else "Tipa",
-                    tipper_last_name=user.last_name if user else "User",
-                    return_url=f"https://t.me/{bot_username}",
-                )
+        keyboard = get_transfer_keyboard(method_code, str(tip_record.id))
 
-                keyboard = get_payment_link_keyboard(checkout_url, amount, creator.display_name)
-                msg_text = (
-                    f"🎁 **Tip for {creator.display_name}**\n\n"
-                    f"Amount: **{amount:g} ETB**{note_display}\n"
-                    f"Ref: `{tx_ref}`\n\n"
-                    f"Click below to complete secure Chapa payment:"
-                )
-
-                if is_edit and update.callback_query:
-                    await update.callback_query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
-                elif update.effective_message:
-                    await update.effective_message.reply_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
-                return
-            except Exception as e:
-                logger.warning(f"Chapa init failed, falling back to direct transfer instructions: {e}")
-
-        if method == "telebirr":
-            keyboard = get_telebirr_transfer_keyboard(str(tip_record.id))
-            instructions = (
-                f"📱 **Telebirr Direct Tip Payment**\n\n"
-                f"👤 Recipient: **{creator.account_name}** ({creator.display_name})\n"
-                f"📱 Telebirr Phone: `{creator.account_number}` *(Tap number to copy)*\n"
-                f"💰 Amount to Send: **{amount:g} ETB**{note_display}\n"
-                f"🔖 Reference Code: `{tx_ref}`\n\n"
-                f"**How to Pay:**\n"
-                f"• **Option 1 (App):** Tap **Open Telebirr Web / App** below or open Telebirr app → Send **{amount:g} ETB** to `{creator.account_number}`.\n"
-                f"• **Option 2 (USSD - No app needed):** Dial `*127#` on your phone → Send Money → Enter `{creator.account_number}`.\n\n"
-                f"After sending, tap **I Have Sent the Payment** below to enter your SMS receipt code:"
-            )
-        else:  # CBE / CBE Birr
-            keyboard = get_cbe_transfer_keyboard(str(tip_record.id))
-            instructions = (
-                f"🏦 **CBE / CBE Birr Tip Payment**\n\n"
-                f"👤 Recipient: **{creator.account_name}** ({creator.display_name})\n"
-                f"🏦 CBE Account Number: `{creator.account_number}` *(Tap number to copy)*\n"
-                f"💰 Amount to Send: **{amount:g} ETB**{note_display}\n"
-                f"🔖 Reference Code: `{tx_ref}`\n\n"
-                f"**How to Pay:**\n"
-                f"• **Option 1 (CBE Mobile App):** Open CBE Mobile app → Transfer **{amount:g} ETB** to `{creator.account_number}`.\n"
-                f"• **Option 2 (CBE Birr USSD - No app needed):** Dial `*847#` on your phone → Transfer Money → Enter `{creator.account_number}`.\n\n"
-                f"After sending, tap **I Have Sent the Payment** below to enter your transaction/SMS receipt code:"
-            )
+        ussd_line = (
+            f"• **Option 2 (USSD - No app needed):** Dial `{ussd}` on your phone → Send Money → Enter `{creator.account_number}`."
+            if ussd
+            else ""
+        )
+        instructions = (
+            f"{emoji} **{method.name} Tip Payment**\n\n"
+            f"👤 Recipient: **{creator.account_name}** ({creator.display_name})\n"
+            f"{emoji} {account_label}: `{creator.account_number}` *(Tap number to copy)*\n"
+            f"💰 Amount to Send: **{amount:g} ETB**{note_display}\n"
+            f"🔖 Reference Code: `{tx_ref}`\n\n"
+            f"**How to Pay:**\n"
+            f"• **Option 1 (App):** Tap **Open {method.name} App** below or open the {method.name} app → Send **{amount:g} ETB** to `{creator.account_number}`.\n"
+            f"{ussd_line}\n\n"
+            f"After sending, tap **I Have Sent the Payment** below to enter your SMS receipt code:"
+        )
 
         if is_edit and update.callback_query:
             await update.callback_query.edit_message_text(instructions, reply_markup=keyboard, parse_mode="Markdown")
         elif update.effective_message:
             await update.effective_message.reply_text(instructions, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def _is_duplicate_ref(session, tip_id: uuid.UUID, ref_code: str) -> bool:
+    """True when another active tip already claimed the same receipt reference.
+
+    One SMS receipt code maps to exactly one real transfer, so reusing it on a
+    second tip is either a mistake or fraud — the DB unique index on ``ref_id``
+    is the backstop, this check gives the tipper a clear message.
+    """
+    stmt = (
+        select(Tip.id)
+        .where(
+            Tip.ref_id == ref_code,
+            Tip.id != tip_id,
+            Tip.status.in_(["pending", "pending_verification", "success"]),
+        )
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    return res.first() is not None
 
 
 async def process_tip_verification_claim(
@@ -827,7 +741,7 @@ async def process_tip_verification_claim(
     tip_id_str: str,
     ref_code: str,
 ) -> None:
-    """Process claimed payment ref code by tipper and send 1-tap approval notification to Creator."""
+    """Process claimed payment ref code: reject duplicates, auto-verify via providers, else creator approval."""
     try:
         tip_uuid = uuid.UUID(tip_id_str)
     except ValueError:
@@ -854,10 +768,61 @@ async def process_tip_verification_claim(
                 await update.effective_message.reply_text("❌ Creator not found.")
             return
 
-        tip.status = "pending_verification"
-        tip.chapa_ref_id = ref_code
+        if await _is_duplicate_ref(session, tip.id, ref_code):
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    f"❌ **Duplicate Reference Code**\n\n"
+                    f"The code `{ref_code}` was already used for another tip. "
+                    f"Please double-check your SMS receipt code and try again.",
+                    parse_mode="Markdown",
+                )
+            return
+
+        tip.ref_id = ref_code
         tip.claimed_at = datetime.now(timezone.utc)
         await session.commit()
+
+        verify_result = await auto_verify_tip(session, tip, creator, ref_code)
+
+        if verify_result is not None and verify_result.verified:
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    f"✅ **Tip Payment Verified!**\n\n"
+                    f"Ref/SMS Code: `{ref_code}`\n"
+                    f"Amount: **{float(tip.amount):g} ETB**\n\n"
+                    f"Your tip to **{creator.display_name}** has been confirmed. Thank you for your support! 🙏",
+                    parse_mode="Markdown",
+                )
+            await notify_tip_success(str(tip.id))
+            return
+
+        tip.status = "pending_verification"
+        await session.commit()
+
+        tipper_name = tip.tipper_display_name or "A follower"
+        note_str = f"\n💬 **Note:** *\"{tip.note}\"*\n" if tip.note else ""
+        post_str = f"\n📌 **Channel Post:** #{tip.post_id}\n" if tip.post_id else ""
+        method_str = method_name(creator.payment_method)
+
+        creator_approval_msg = (
+            f"💸 **New Tip Received via {method_str}!**\n\n"
+            f"**{tipper_name}** claims they sent **{float(tip.amount):g} ETB** to your `{creator.account_number}`.\n"
+            f"Receipt / Ref Code: `{ref_code}`\n"
+            f"{post_str}"
+            f"{note_str}\n"
+            f"Please check your {method_str} app and tap **Approve Tip** below to confirm:"
+        )
+
+        try:
+            approval_kb = get_creator_approval_keyboard(str(tip.id))
+            await context.bot.send_message(
+                chat_id=creator.telegram_id,
+                text=creator_approval_msg,
+                reply_markup=approval_kb,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Failed to send creator approval notification: {e}")
 
     if update.effective_message:
         await update.effective_message.reply_text(
@@ -867,31 +832,6 @@ async def process_tip_verification_claim(
             f"We have notified **{creator.display_name}**. Once they verify receipt, your tip will be confirmed! 🙏",
             parse_mode="Markdown",
         )
-
-    tipper_name = tip.tipper_display_name or "A follower"
-    note_str = f"\n💬 **Note:** *\"{tip.note}\"*\n" if tip.note else ""
-    post_str = f"\n📌 **Channel Post:** #{tip.post_id}\n" if tip.post_id else ""
-    method_name = creator.payment_method.upper()
-
-    creator_approval_msg = (
-        f"💸 **New Tip Received via {method_name}!**\n\n"
-        f"**{tipper_name}** claims they sent **{float(tip.amount):g} ETB** to your `{creator.account_number}`.\n"
-        f"Receipt / Ref Code: `{ref_code}`\n"
-        f"{post_str}"
-        f"{note_str}\n"
-        f"Please check your {method_name} app and tap **Approve Tip** below to confirm:"
-    )
-
-    try:
-        approval_kb = get_creator_approval_keyboard(str(tip.id))
-        await context.bot.send_message(
-            chat_id=creator.telegram_id,
-            text=creator_approval_msg,
-            reply_markup=approval_kb,
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.error(f"Failed to send creator approval notification: {e}")
 
 
 async def handle_creator_approval(
@@ -928,7 +868,17 @@ async def handle_creator_approval(
         if is_approve:
             tip.status = "success"
             tip.verified_at = datetime.now(timezone.utc)
+            tip.verification_method = "creator_approval"
             await session.commit()
+            await log_verification_attempt(
+                session,
+                tip_id=tip.id,
+                provider="creator_approval",
+                status="success",
+                verified=True,
+                amount=float(tip.amount),
+                message="Approved manually by the creator",
+            )
 
             note_str = f" (*\"{tip.note}\"*)" if tip.note else ""
             await query.edit_message_text(
@@ -950,12 +900,21 @@ async def handle_creator_approval(
         else:
             tip.status = "failed"
             await session.commit()
-            await query.edit_message_text(f"❌ **Tip Claim Rejected**\n\nMarked claim for `{tip.chapa_ref_id}` as unverified/rejected.")
+            await log_verification_attempt(
+                session,
+                tip_id=tip.id,
+                provider="creator_approval",
+                status="failed",
+                verified=False,
+                amount=float(tip.amount),
+                message="Rejected by the creator",
+            )
+            await query.edit_message_text(f"❌ **Tip Claim Rejected**\n\nMarked claim for `{tip.ref_id}` as unverified/rejected.")
             if tip.tipper_telegram_id:
                 try:
                     await context.bot.send_message(
                         chat_id=tip.tipper_telegram_id,
-                        text=f"❌ **Tip Claim Unverified**\n\nYour tip claim for **{float(tip.amount):g} ETB** (Ref: `{tip.chapa_ref_id}`) could not be verified by **{creator.display_name}**.",
+                        text=f"❌ **Tip Claim Unverified**\n\nYour tip claim for **{float(tip.amount):g} ETB** (Ref: `{tip.ref_id}`) could not be verified by **{creator.display_name}**.",
                         parse_mode="Markdown",
                     )
                 except Exception as e:
@@ -1017,7 +976,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 title="⚠️ Register with Tipa First",
                 description="Run /register in private chat with @TipaPayBot to get your tipping button",
                 input_message_content=InputTextMessageContent(
-                    f"Please register your Telebirr/CBE details with @{bot_name} first using /register!"
+                    f"Please register your payment details with @{bot_name} first using /register!"
                 ),
             )
         ]
@@ -1082,7 +1041,7 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         recent_tips = rec_res.scalars().all()
 
     deep_link = f"https://t.me/{context.bot.username}?start=tip_{creator.id}"
-    method_str = creator.payment_method.upper()
+    method_str = method_name(creator.payment_method)
     text = (
         f"📊 **Creator Dashboard — {creator.display_name}**\n"
         f"Payment Method: **{method_str}** (`{creator.account_number}`)\n\n"
@@ -1152,11 +1111,10 @@ async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     telegram_id=user.id,
                     telegram_username=user.username,
                     display_name=user_name,
-                    bank_code=861,
+                    bank_code=869,
                     payment_method="telebirr",
                     account_number="Pending",
                     account_name=user_name,
-                    chapa_subaccount_id=f"manual_{user.id}",
                     channel_id=chat_id,
                 )
                 session.add(creator)

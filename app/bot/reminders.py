@@ -38,7 +38,7 @@ def _safe(value: Optional[str], max_len: int = 100) -> str:
 async def _send_reminder(bot, tip: Tip, creator: Creator) -> None:
     """Nudge the creator to approve a claimed tip that is still waiting."""
     tipper = _safe(tip.tipper_display_name) or "A supporter"
-    ref = _safe(tip.chapa_ref_id)
+    ref = _safe(tip.ref_id)
     try:
         await bot.send_message(
             chat_id=creator.telegram_id,
