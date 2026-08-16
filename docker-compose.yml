@@ -23,8 +23,13 @@ services:
     environment:
       - BOT_TOKEN=${BOT_TOKEN:-}
       - BOT_USERNAME=TipaPayBot
+      - VERIFY_ET_API_KEY=${VERIFY_ET_API_KEY:-}
+      - VERIFY_ET_BASE_URL=https://verify.et
+      - CHECK_ET_API_KEY=${CHECK_ET_API_KEY:-}
+      - CHECK_ET_BASE_URL=https://api.check.et/api/v1
+      - JUSTVERIFY_API_KEY=${JUSTVERIFY_API_KEY:-}
+      - JUSTVERIFY_BASE_URL=https://justverify.et
       - DATABASE_URL=postgresql+asyncpg://tipa_user:tipa_password@db:5432/tipa_db
-      - WEBHOOK_BASE_URL=http://localhost:8000
       - PLATFORM_FEE_BIRR=0.0
     depends_on:
       - db

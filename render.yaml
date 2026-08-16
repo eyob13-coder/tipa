@@ -12,12 +12,22 @@ services:
         sync: false
       - key: BOT_USERNAME
         value: TipaPayBot
+      - key: VERIFY_ET_API_KEY
+        sync: false
+      - key: VERIFY_ET_BASE_URL
+        value: https://verify.et
+      - key: CHECK_ET_API_KEY
+        sync: false
+      - key: CHECK_ET_BASE_URL
+        value: https://api.check.et/api/v1
+      - key: JUSTVERIFY_API_KEY
+        sync: false
+      - key: JUSTVERIFY_BASE_URL
+        value: https://justverify.et
       - key: DATABASE_URL
         fromDatabase:
           name: tipa-db
           property: connectionString
-      - key: WEBHOOK_BASE_URL
-        value: https://tipa-app.onrender.com
       - key: PLATFORM_FEE_BIRR
         value: "0.0"
       - key: PYTHON_VERSION
