@@ -33,6 +33,7 @@ from app.bot.notifications import notify_tip_success
 from app.config import settings
 from app.db.models import Creator, Tip
 from app.db.session import AsyncSessionLocal
+from app.export import build_tips_csv
 from app.payment_methods import (
     get_method,
     method_name,
@@ -113,6 +114,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"📌 **Quick Actions:**\n"
             f"• `/post` — Generate channel post & 1-tap tip button\n"
             f"• `/mytips` — View your total earnings & supporter notes\n"
+            f"• `/export` — Download your tips as a CSV file\n"
             f"• `/register` — Update your payment details\n"
             f"• `/help` — Detailed command guide",
             parse_mode="Markdown",
@@ -146,6 +148,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"📢 /addchannel — Link your Telegram channel for auto-tipping.\n\n"
         f"📢 /post — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
         f"📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
+        f"📄 /export — Download your verified tip history as a CSV file (reconciliation trail).\n\n"
         f"💬 **Supporter Notes** — Tippers can leave an optional encouraging message/note with their tip.\n\n"
         f"⚡ **Inline Mode** — Type `@{bot_name}` while composing a post in any Telegram channel to attach a tip button instantly!\n\n"
         f"❌ /cancel — Cancel any active registration step or tipping session."
@@ -1060,6 +1063,50 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text += "💡 *No successful tips yet. Share your tip link in your Telegram channel to start receiving tips!*"
 
     await update.effective_message.reply_text(text, parse_mode="Markdown")
+
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export the creator's verified tips as a CSV document."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ You are not registered as a creator yet.\nRun `/register` to link your bank or Telebirr account!",
+                parse_mode="Markdown",
+            )
+            return
+
+        t_stmt = (
+            select(Tip)
+            .where(Tip.creator_id == creator.id, Tip.status == "success")
+            .order_by(desc(Tip.verified_at), desc(Tip.created_at))
+        )
+        t_res = await session.execute(t_stmt)
+        tips = t_res.scalars().all()
+
+    if not tips:
+        await update.effective_message.reply_text(
+            "📄 **No successful tips to export yet.**\n"
+            "Share your tip link to start receiving tips — they will appear here once verified!",
+            parse_mode="Markdown",
+        )
+        return
+
+    filename = f"tipa_{creator.telegram_id}_tips.csv"
+    await update.effective_message.reply_document(
+        document=io.BytesIO(build_tips_csv(tips).encode("utf-8")),
+        filename=filename,
+        caption=f"📄 **{len(tips)} tips exported** ({filename})",
+        parse_mode="Markdown",
+    )
 
 
 async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

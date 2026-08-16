@@ -29,6 +29,7 @@ from app.bot.handlers import (
     channel_link_received,
     channel_post_generator,
     confirm_registration_callback,
+    export_command,
     help_command,
     inline_query_handler,
     mytips_command,
@@ -53,6 +54,7 @@ async def post_init_setup(application: Application) -> None:
         BotCommand("register", "Link your payment method (mobile money / bank)"),
         BotCommand("post", "Generate channel post & tip button"),
         BotCommand("mytips", "View total earnings & tips history"),
+        BotCommand("export", "Download your tips as CSV"),
         BotCommand("help", "Command guide & instructions"),
         BotCommand("cancel", "Cancel current registration or action"),
     ]
@@ -107,6 +109,7 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(registration_conv)
     app.add_handler(CommandHandler("mytips", mytips_command))
+    app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("post", channel_post_generator))
     app.add_handler(CommandHandler("addchannel", addchannel_command))
     app.add_handler(MessageHandler(filters.FORWARDED, addchannel_command))

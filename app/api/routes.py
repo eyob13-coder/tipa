@@ -1,4 +1,3 @@
-import csv
 import hashlib
 import hmac
 import io
@@ -22,6 +21,7 @@ from app.bot.notifications import notify_tip_success
 from app.config import settings
 from app.db.models import Creator, Tip
 from app.db.session import AsyncSessionLocal
+from app.export import build_tips_csv
 from app.payment_methods import (
     account_label_for,
     deep_link_for,
@@ -224,25 +224,10 @@ async def export_creator_tips_csv(
         res = await session.execute(stmt)
         tips = res.scalars().all()
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(["date", "tipper_name", "amount_etb", "note", "verification_method", "tx_ref"])
-    for tip in tips:
-        writer.writerow(
-            [
-                (tip.verified_at or tip.created_at).strftime("%Y-%m-%d %H:%M"),
-                tip.tipper_display_name or "Anonymous",
-                f"{float(tip.amount):.2f}",
-                tip.note or "",
-                tip.verification_method or "",
-                tip.tx_ref,
-            ]
-        )
-    buffer.seek(0)
-
+    csv_text = build_tips_csv(tips)
     filename = f"tipa_{creator.telegram_id}_tips.csv"
     return StreamingResponse(
-        buffer,
+        io.StringIO(csv_text),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
