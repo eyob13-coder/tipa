@@ -3,37 +3,36 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 import pytesseract
 from PIL import Image
-
+from sqlalchemy import desc, func, select
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update,
     InlineQueryResultArticle,
     InputTextMessageContent,
+    Update,
 )
+from telegram.error import TelegramError
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
 )
-from sqlalchemy import select, func, desc
 
-from app.config import settings
-from app.db.session import AsyncSessionLocal
-from app.db.models import Creator, Tip
 from app.bot.keyboards import (
+    get_channel_post_button,
+    get_confirm_registration_keyboard,
+    get_creator_approval_keyboard,
     get_payment_method_selection_keyboard,
     get_tip_amount_keyboard,
     get_tip_note_prompt_keyboard,
     get_transfer_keyboard,
-    get_creator_approval_keyboard,
-    get_confirm_registration_keyboard,
-    get_channel_post_button,
 )
 from app.bot.notifications import notify_tip_success
+from app.config import settings
+from app.db.models import Creator, Tip
+from app.db.session import AsyncSessionLocal
 from app.payment_methods import (
     get_method,
     method_name,
@@ -278,7 +277,7 @@ async def channel_link_received(update: Update, context: ContextTypes.DEFAULT_TY
             if clean_handle:
                 try:
                     forward_chat = await context.bot.get_chat(f"@{clean_handle}")
-                except Exception as e:
+                except TelegramError as e:
                     logger.warning(f"Could not resolve channel @{clean_handle}: {e}")
 
         if forward_chat and getattr(forward_chat, "type", None) == "channel":
@@ -494,7 +493,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_creator_approval(update, context, tip_id_str, is_approve=False)
 
 
-def extract_ref_code_from_image(image_bytes: bytes) -> Optional[str]:
+def extract_ref_code_from_image(image_bytes: bytes) -> str | None:
     """Extract a transaction reference number from a receipt screenshot image via OCR & regex."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
@@ -513,7 +512,7 @@ def extract_ref_code_from_image(image_bytes: bytes) -> Optional[str]:
                 clean_m = m.upper()
                 if len(clean_m) >= 6 and re.match(r"^[A-Z0-9\-_]{6,30}$", clean_m):
                     return clean_m
-    except Exception as e:
+    except (pytesseract.TesseractError, OSError, ValueError) as e:
         logger.warning(f"OCR processing fallback: {e}")
     return None
 
@@ -633,7 +632,7 @@ async def process_tip_initialization(
     context: ContextTypes.DEFAULT_TYPE,
     creator_id_str: str,
     amount: float,
-    note: Optional[str] = None,
+    note: str | None = None,
     is_edit: bool = False,
 ) -> None:
     """Initialize tip record and present payment instructions (Telebirr / CBE)."""
@@ -821,7 +820,7 @@ async def process_tip_verification_claim(
                 reply_markup=approval_kb,
                 parse_mode="Markdown",
             )
-        except Exception as e:
+        except TelegramError as e:
             logger.error(f"Failed to send creator approval notification: {e}")
 
     if update.effective_message:
@@ -895,7 +894,7 @@ async def handle_creator_approval(
                         text=f"🎉 **Tip Verified!**\n\nYour **{float(tip.amount):g} ETB** tip to **{creator.display_name}** has been confirmed by the creator! Thank you for your support! 🙏",
                         parse_mode="Markdown",
                     )
-                except Exception as e:
+                except TelegramError as e:
                     logger.error(f"Failed to notify tipper: {e}")
         else:
             tip.status = "failed"
@@ -917,7 +916,7 @@ async def handle_creator_approval(
                         text=f"❌ **Tip Claim Unverified**\n\nYour tip claim for **{float(tip.amount):g} ETB** (Ref: `{tip.ref_id}`) could not be verified by **{creator.display_name}**.",
                         parse_mode="Markdown",
                     )
-                except Exception as e:
+                except TelegramError as e:
                     logger.error(f"Failed to notify tipper of rejection: {e}")
 
 
@@ -1084,7 +1083,7 @@ async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if clean_handle:
             try:
                 forward_chat = await context.bot.get_chat(f"@{clean_handle}")
-            except Exception as e:
+            except TelegramError as e:
                 logger.warning(f"Could not resolve channel @{clean_handle}: {e}")
                 await msg.reply_text(
                     f"❌ Could not find channel **@{clean_handle}**.\n"
@@ -1176,5 +1175,5 @@ async def auto_channel_post_handler(update: Update, context: ContextTypes.DEFAUL
             reply_markup=keyboard,
         )
         logger.info(f"Auto-attached tip button for creator {creator.display_name} on channel post {post_id}")
-    except Exception as e:
+    except TelegramError as e:
         logger.error(f"Could not auto-attach tip button to channel post: {e}")

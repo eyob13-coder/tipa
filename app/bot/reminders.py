@@ -1,9 +1,9 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
+from telegram.error import TelegramError
 
 from app.bot.bot import get_telegram_application
 from app.bot.keyboards import get_creator_approval_keyboard
@@ -14,7 +14,7 @@ from app.db.session import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
-def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+def _as_utc(value: datetime | None) -> datetime | None:
     """Normalize a datetime to UTC-aware, assuming UTC for naive values (SQLite)."""
     if value is None:
         return None
@@ -27,7 +27,7 @@ def _hours_between(now: datetime, earlier: datetime) -> float:
     return (now - earlier).total_seconds() / 3600.0
 
 
-def _safe(value: Optional[str], max_len: int = 100) -> str:
+def _safe(value: str | None, max_len: int = 100) -> str:
     """Strip markup-breaking characters before putting user input in a message."""
     if not value:
         return ""
@@ -54,7 +54,7 @@ async def _send_reminder(bot, tip: Tip, creator: Creator) -> None:
             parse_mode="Markdown",
         )
         logger.info("Sent approval reminder to creator %s for tip %s", creator.telegram_id, tip.id)
-    except Exception as e:
+    except TelegramError as e:
         logger.error("Failed to send approval reminder to creator %s: %s", creator.telegram_id, e)
 
 
@@ -74,7 +74,7 @@ async def _send_expired(bot, tip: Tip, creator: Creator) -> None:
             parse_mode="Markdown",
         )
         logger.info("Notified creator %s that tip %s expired", creator.telegram_id, tip.id)
-    except Exception as e:
+    except TelegramError as e:
         logger.error("Failed to notify creator %s about expired tip: %s", creator.telegram_id, e)
 
     if tip.tipper_telegram_id:
@@ -90,15 +90,15 @@ async def _send_expired(bot, tip: Tip, creator: Creator) -> None:
                 parse_mode="Markdown",
             )
             logger.info("Notified tipper %s that tip %s expired", tip.tipper_telegram_id, tip.id)
-        except Exception as e:
+        except TelegramError as e:
             logger.error("Failed to notify tipper %s about expired tip: %s", tip.tipper_telegram_id, e)
 
 
 async def remind_and_expire_pending_tips(
     bot=None,
-    now: Optional[datetime] = None,
-    reminder_hours: Optional[float] = None,
-    expiry_hours: Optional[float] = None,
+    now: datetime | None = None,
+    reminder_hours: float | None = None,
+    expiry_hours: float | None = None,
 ) -> dict:
     """One pass over claimed tips: send approval reminders and expire old ones.
 
@@ -161,6 +161,6 @@ async def run_tip_reminder_loop() -> None:
         except asyncio.CancelledError:
             logger.info("Tip reminder loop stopped.")
             raise
-        except Exception as e:
-            logger.exception("Tip reminder loop error: %s", e)
+        except Exception:
+            logger.exception("Tip reminder loop error")
         await asyncio.sleep(settings.tip_reminder_loop_minutes * 60)

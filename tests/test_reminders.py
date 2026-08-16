@@ -2,9 +2,9 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import app.bot.reminders as reminders
+from app.bot import reminders
 from app.db.base import Base
 from app.db.models import Creator, Tip
 
@@ -31,7 +31,6 @@ class _RecordingBot:
 
     async def send_message(self, **kwargs):
         self.messages.append(kwargs)
-        return None
 
 
 def _creator(telegram_id=111):

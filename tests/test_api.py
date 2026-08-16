@@ -1,11 +1,12 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
+from conftest import make_init_data
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.config import settings
 from app.db.models import Creator
-from conftest import make_init_data
+from app.main import app
 
 client = TestClient(app)
 

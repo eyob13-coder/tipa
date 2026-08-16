@@ -27,6 +27,9 @@ htmlcov/
 *.log
 logs/
 
+# Business docs kept out of the repo
+PITCH.md
+
 # Editors / OS
 .vscode/
 .idea/

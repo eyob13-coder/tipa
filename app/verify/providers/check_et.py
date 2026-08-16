@@ -5,7 +5,6 @@ One endpoint (POST /verify), Bearer token auth, normalized response across
 CBE, Telebirr, Dashen, Awash, BOA, CBE Birr, M-Pesa, Zemen, and Siinqee.
 """
 import logging
-from typing import Dict, Optional
 
 import httpx
 
@@ -15,7 +14,7 @@ from app.verify.base import VerificationError, VerificationProvider, VerifyResul
 logger = logging.getLogger(__name__)
 
 
-def _as_float(value) -> Optional[float]:
+def _as_float(value) -> float | None:
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
@@ -26,7 +25,7 @@ class CheckEtProvider(VerificationProvider):
     name = "check_et"
     supported_banks = ("cbe", "telebirr", "dashen", "awash", "boa", "cbebirr", "mpesa", "zemen", "siinqee")
 
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://api.check.et/api/v1"):
+    def __init__(self, api_key: str | None = None, base_url: str = "https://api.check.et/api/v1"):
         self.api_key = api_key if api_key is not None else settings.check_et_api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = 20.0
@@ -35,7 +34,7 @@ class CheckEtProvider(VerificationProvider):
     def enabled(self) -> bool:
         return bool(self.api_key)
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -45,13 +44,13 @@ class CheckEtProvider(VerificationProvider):
         self,
         bank: str,
         reference: str,
-        account_number: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        account_number: str | None = None,
+        idempotency_key: str | None = None,
     ) -> VerifyResult:
         if not self.enabled:
             raise VerificationError("check.et is not configured (no CHECK_ET_API_KEY)")
 
-        payload: Dict[str, object] = {"bank": bank, "transaction_number": reference}
+        payload: dict[str, object] = {"bank": bank, "transaction_number": reference}
         if bank in ("cbe", "cbebirr", "boa") and account_number:
             payload["account_number"] = account_number
 
@@ -59,13 +58,13 @@ class CheckEtProvider(VerificationProvider):
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(url, json=payload, headers=self._headers())
-        except Exception as e:
-            logger.exception("check.et request failed: %s", e)
+        except httpx.HTTPError as e:
+            logger.exception("check.et request failed")
             raise VerificationError(f"check.et connection error: {e}")
 
         try:
             body = response.json()
-        except Exception:
+        except ValueError:
             body = {}
 
         if response.status_code == 404:

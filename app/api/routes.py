@@ -1,24 +1,27 @@
-import uuid
-import hmac
+import csv
 import hashlib
+import hmac
 import io
 import json
-import csv
+import logging
 import time
 import urllib.parse
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
-from typing import Optional
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, desc
+from sqlalchemy import desc, func, select
+from telegram.error import TelegramError
 
-from app.config import settings
-from app.db.session import AsyncSessionLocal
-from app.db.models import Creator, Tip
 from app.bot.bot import get_telegram_application
 from app.bot.keyboards import get_creator_approval_keyboard
+from app.bot.notifications import notify_tip_success
+from app.config import settings
+from app.db.models import Creator, Tip
+from app.db.session import AsyncSessionLocal
 from app.payment_methods import (
     account_label_for,
     deep_link_for,
@@ -27,7 +30,8 @@ from app.payment_methods import (
     ussd_code_for,
 )
 from app.verify.service import auto_verify_tip
-from app.bot.notifications import notify_tip_success
+
+logger = logging.getLogger(__name__)
 
 
 def validate_telegram_init_data(init_data: str) -> bool:
@@ -44,11 +48,11 @@ def validate_telegram_init_data(init_data: str) -> bool:
         secret_key = hmac.new(b"WebAppData", settings.bot_token.encode(), hashlib.sha256).digest()
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(calculated_hash, hash_check)
-    except Exception:
+    except (TypeError, ValueError, UnicodeError):
         return False
 
 
-def parse_init_data_user(init_data: str) -> Optional[int]:
+def parse_init_data_user(init_data: str) -> int | None:
     """Return the verified Telegram user id from initData, or None."""
     if not init_data or not validate_telegram_init_data(init_data):
         return None
@@ -58,7 +62,7 @@ def parse_init_data_user(init_data: str) -> Optional[int]:
         if not user:
             return None
         return int(json.loads(user).get("id"))
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -99,10 +103,10 @@ router = APIRouter(prefix="/api", tags=["miniapp"])
 class TipInitRequest(BaseModel):
     creator_id: str
     amount: float = Field(..., gt=0, le=50000)
-    note: Optional[str] = None
-    post_id: Optional[str] = None
-    tipper_telegram_id: Optional[int] = None
-    tipper_display_name: Optional[str] = None
+    note: str | None = None
+    post_id: str | None = None
+    tipper_telegram_id: int | None = None
+    tipper_display_name: str | None = None
 
 
 class TipClaimRequest(BaseModel):
@@ -342,10 +346,7 @@ async def claim_tip_payment(
         verify_result = await auto_verify_tip(session, tip, creator, req.ref_code)
 
         if verify_result is not None and verify_result.verified:
-            try:
-                await notify_tip_success(str(tip.id))
-            except Exception:
-                pass
+            await notify_tip_success(str(tip.id))
             return {
                 "status": "ok",
                 "verified": True,
@@ -378,7 +379,7 @@ async def claim_tip_payment(
             reply_markup=approval_kb,
             parse_mode="Markdown",
         )
-    except Exception:
-        pass
+    except TelegramError as e:
+        logger.warning("Failed to send creator approval notification: %s", e)
 
     return {"status": "ok", "verified": False, "message": "Payment claim submitted for creator approval"}

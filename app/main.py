@@ -5,14 +5,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import settings
-from app.db.session import init_db, AsyncSessionLocal
+from app.api.routes import router as api_router
 from app.bot.bot import get_telegram_application
 from app.bot.reminders import run_tip_reminder_loop
-from app.api.routes import router as api_router
+from app.config import settings
+from app.db.session import AsyncSessionLocal, init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +49,7 @@ async def lifespan(app: FastAPI):
             # Start background tip reminder / expiry loop
             bot_task = asyncio.create_task(run_tip_reminder_loop())
             logger.info("Background tip reminder loop started.")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - app must still boot even if the bot fails
             logger.error(f"Failed to start Telegram Bot: {e}")
 
     yield
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
                 await telegram_app.updater.stop()
             await telegram_app.stop()
             await telegram_app.shutdown()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - shutdown must never crash the process
             logger.error(f"Error stopping Telegram bot: {e}")
 
     logger.info("Application shutdown complete.")
@@ -129,7 +130,7 @@ async def ready():
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
         return {"status": "ready", "database": "ok"}
-    except Exception as e:
+    except SQLAlchemyError as e:
         logger.error("readiness check failed: %s", e)
         return JSONResponse(
             status_code=503,

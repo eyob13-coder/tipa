@@ -1,15 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from telegram import Chat, Message, Update
 
-import app.bot.handlers as handlers
+from app.bot import handlers
 from app.bot.keyboards import (
+    get_channel_post_button,
     get_payment_method_selection_keyboard,
     get_tip_amount_keyboard,
     get_tip_note_prompt_keyboard,
-    get_channel_post_button,
     get_transfer_keyboard,
 )
 from app.db.base import Base
@@ -121,7 +121,7 @@ async def test_auto_channel_post_handler_attaches_correct_button(monkeypatch):
     monkeypatch.setattr(handlers, "AsyncSessionLocal", session_factory)
 
     chat = Chat(id=-1001896209701, type="channel", title="GlitchCraft", username="glitchcrafts")
-    msg = Message(message_id=137, date=datetime.now(), chat=chat, text="hello channel")
+    msg = Message(message_id=137, date=datetime.now(timezone.utc), chat=chat, text="hello channel")
     update = Update(update_id=1, channel_post=msg)
 
     bot = _RecordingBot()
@@ -160,7 +160,7 @@ async def test_auto_channel_post_handler_skips_unlinked_channel(monkeypatch):
     monkeypatch.setattr(handlers, "AsyncSessionLocal", session_factory)
 
     chat = Chat(id=-100111, type="channel", title="Some Other Channel")
-    msg = Message(message_id=1, date=datetime.now(), chat=chat, text="hello")
+    msg = Message(message_id=1, date=datetime.now(timezone.utc), chat=chat, text="hello")
     update = Update(update_id=1, channel_post=msg)
 
     bot = _RecordingBot()

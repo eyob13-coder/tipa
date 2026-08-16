@@ -1,5 +1,7 @@
 import os
+
 from PIL import Image, ImageDraw
+
 
 def create_640x360_banner():
     width, height = 640, 360

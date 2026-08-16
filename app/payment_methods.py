@@ -9,7 +9,6 @@ USSD codes should be treated as best-effort guidance; they change when banks
 migrate mobile banking platforms.
 """
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 # Codes used by the verification providers (check.et / justverify). Anything not
 # listed here still works end-to-end but falls back to creator approval because
@@ -34,15 +33,15 @@ class PaymentMethod:
     code: str
     name: str
     kind: str  # 'mobile' (phone number) | 'bank' (account number)
-    ussd_code: Optional[str]
+    ussd_code: str | None
     deep_link_url: str
     bank_code: int = 0  # legacy Chapa-era bank code, kept for the creators.bank_code column
-    android_url: Optional[str] = None
-    ios_url: Optional[str] = None
+    android_url: str | None = None
+    ios_url: str | None = None
     account_label: str = ""
 
 
-PAYMENT_METHODS: Dict[str, PaymentMethod] = {
+PAYMENT_METHODS: dict[str, PaymentMethod] = {
     "telebirr": PaymentMethod(
         code="telebirr",
         name="Telebirr",
@@ -148,7 +147,7 @@ PAYMENT_METHODS: Dict[str, PaymentMethod] = {
 }
 
 
-def get_method(code: str) -> Optional[PaymentMethod]:
+def get_method(code: str) -> PaymentMethod | None:
     return PAYMENT_METHODS.get(code)
 
 

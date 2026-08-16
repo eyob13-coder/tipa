@@ -6,7 +6,7 @@ Submits a reference for verification and polls a queued result until terminal.
 import asyncio
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -20,7 +20,7 @@ class VerifyEtProvider(VerificationProvider):
     name = "verify_et"
     supported_banks = ("cbe", "telebirr")
 
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://verify.et"):
+    def __init__(self, api_key: str | None = None, base_url: str = "https://verify.et"):
         self.api_key = api_key if api_key is not None else settings.verify_et_api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = 20.0
@@ -29,7 +29,7 @@ class VerifyEtProvider(VerificationProvider):
     def enabled(self) -> bool:
         return bool(self.api_key)
 
-    def _headers(self, idempotency_key: str) -> Dict[str, str]:
+    def _headers(self, idempotency_key: str) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "x-api-key": self.api_key,
@@ -37,7 +37,7 @@ class VerifyEtProvider(VerificationProvider):
         }
 
     @staticmethod
-    def _extract_verification(payload: Any) -> Optional[Dict[str, Any]]:
+    def _extract_verification(payload: Any) -> dict[str, Any] | None:
         """Find the verification record in either the 200 or 202 response shape."""
         if not isinstance(payload, dict):
             return None
@@ -53,15 +53,15 @@ class VerifyEtProvider(VerificationProvider):
         self,
         bank: str,
         reference: str,
-        account_number: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        account_number: str | None = None,
+        idempotency_key: str | None = None,
         wait_ms: int = 8000,
         max_polls: int = 5,
     ) -> VerifyResult:
         if not self.enabled:
             raise VerificationError("verify.et is not configured (no VERIFY_ET_API_KEY)")
 
-        payload: Dict[str, Any] = {"bank": bank}
+        payload: dict[str, Any] = {"bank": bank}
         if bank == "cbe":
             payload["referenceNumber"] = reference
             if account_number and len(account_number) >= 8:
@@ -84,18 +84,18 @@ class VerifyEtProvider(VerificationProvider):
                 try:
                     body = response.json()
                     message = body.get("message") if isinstance(body, dict) else ""
-                except Exception:
+                except ValueError:
                     message = ""
                 raise VerificationError(
                     f"verify.et HTTP {response.status_code}: {message or response.text[:200]}"
                 )
         except VerificationError:
             raise
-        except Exception as e:
-            logger.exception("verify.et request failed: %s", e)
+        except (httpx.HTTPError, ValueError) as e:
+            logger.exception("verify.et request failed")
             raise VerificationError(f"verify.et connection error: {e}")
 
-    async def _poll(self, client: httpx.AsyncClient, queued: Dict[str, Any], max_polls: int) -> VerifyResult:
+    async def _poll(self, client: httpx.AsyncClient, queued: dict[str, Any], max_polls: int) -> VerifyResult:
         status_url = ""
         for key in ("statusUrl",):
             value = queued.get(key)
@@ -121,7 +121,7 @@ class VerifyEtProvider(VerificationProvider):
             await asyncio.sleep(poll_after)
             try:
                 response = await client.get(status_url, headers=self._headers(request_id))
-            except Exception as e:
+            except httpx.HTTPError as e:
                 logger.warning("verify.et poll failed: %s", e)
                 break
             if response.status_code != 200:
@@ -143,7 +143,7 @@ class VerifyEtProvider(VerificationProvider):
             request_id=request_id, status="pending", message="Verification still queued after polling timeout"
         )
 
-    def _parse_completed(self, payload: Dict[str, Any]) -> VerifyResult:
+    def _parse_completed(self, payload: dict[str, Any]) -> VerifyResult:
         record = self._extract_verification(payload)
         request_id = str(payload.get("requestId") or "") or (str(record.get("requestId")) if record else "")
         result = self._from_record(record, request_id=request_id)
@@ -152,7 +152,7 @@ class VerifyEtProvider(VerificationProvider):
         return result
 
     @staticmethod
-    def _from_record(record: Optional[Dict[str, Any]], request_id: str = "") -> VerifyResult:
+    def _from_record(record: dict[str, Any] | None, request_id: str = "") -> VerifyResult:
         if record is None:
             return VerifyResult(request_id=request_id, message="No verification record in response")
         status = str(record.get("status") or "unknown")

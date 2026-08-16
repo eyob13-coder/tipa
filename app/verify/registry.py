@@ -7,7 +7,6 @@ not-found/failed — stops the chain: we never ask a second provider to override
 a definitive negative.
 """
 import logging
-from typing import Dict, List, Optional, Tuple
 
 from app.verify.base import VerificationError, VerificationProvider, VerifyResult
 from app.verify.providers.check_et import CheckEtProvider
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 # (upstream Ethio Telecom issue), so check.et leads for Telebirr. verify.et only
 # supports CBE and Telebirr; the remaining banks fall back to check.et then
 # justverify (both cover all nine banks).
-BANK_PRIORITY: Dict[str, Tuple[str, ...]] = {
+BANK_PRIORITY: dict[str, tuple[str, ...]] = {
     "cbe": ("verify_et", "check_et", "justverify"),
     "telebirr": ("check_et", "verify_et", "justverify"),
     "dashen": ("check_et", "justverify"),
@@ -36,23 +35,23 @@ BANK_PRIORITY: Dict[str, Tuple[str, ...]] = {
 class ProviderRegistry:
     def __init__(
         self,
-        providers: Optional[List[VerificationProvider]] = None,
-        priority: Optional[Dict[str, Tuple[str, ...]]] = None,
+        providers: list[VerificationProvider] | None = None,
+        priority: dict[str, tuple[str, ...]] | None = None,
     ):
-        self._providers: Dict[str, VerificationProvider] = {
+        self._providers: dict[str, VerificationProvider] = {
             p.name: p for p in (providers or self._default_providers())
         }
         self._priority = priority or BANK_PRIORITY
 
     @staticmethod
-    def _default_providers() -> List[VerificationProvider]:
+    def _default_providers() -> list[VerificationProvider]:
         return [VerifyEtProvider(), CheckEtProvider(), JustVerifyProvider()]
 
     @property
-    def enabled_providers(self) -> List[VerificationProvider]:
+    def enabled_providers(self) -> list[VerificationProvider]:
         return [p for p in self._providers.values() if p.enabled]
 
-    def providers_for(self, bank: str) -> List[VerificationProvider]:
+    def providers_for(self, bank: str) -> list[VerificationProvider]:
         order = self._priority.get(bank, tuple(self._providers))
         return [self._providers[name] for name in order if name in self._providers]
 
@@ -60,10 +59,10 @@ class ProviderRegistry:
         self,
         bank: str,
         reference: str,
-        account_number: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        account_number: str | None = None,
+        idempotency_key: str | None = None,
     ) -> VerifyResult:
-        attempts: List[VerifyResult] = []
+        attempts: list[VerifyResult] = []
         for provider in self.providers_for(bank):
             if not provider.enabled or bank not in provider.supported_banks:
                 continue

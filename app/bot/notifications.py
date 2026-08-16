@@ -1,6 +1,8 @@
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from telegram.error import TelegramError
 
 from app.db.models import Creator, Tip
 from app.db.session import AsyncSessionLocal
@@ -48,7 +50,7 @@ async def notify_tip_success(tip_id: str) -> None:
                 text=creator_msg,
                 parse_mode="Markdown",
             )
-        except Exception as e:
+        except TelegramError as e:
             logger.error(f"Failed to send Telegram notification to creator {creator.telegram_id}: {e}")
 
         if tip.tipper_telegram_id:
@@ -63,8 +65,8 @@ async def notify_tip_success(tip_id: str) -> None:
                     text=tipper_msg,
                     parse_mode="Markdown",
                 )
-            except Exception as e:
+            except TelegramError as e:
                 logger.error(f"Failed to send Telegram notification to tipper {tip.tipper_telegram_id}: {e}")
 
-    except Exception as e:
-        logger.exception(f"Error in notify_tip_success background task: {e}")
+    except (TelegramError, SQLAlchemyError):
+        logger.exception("Error in notify_tip_success background task")

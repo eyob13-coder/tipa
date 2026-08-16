@@ -5,7 +5,6 @@ POST /v1/verify with Bearer token. Returns amount, status, and payer info in
 one request — no polling needed.
 """
 import logging
-from typing import Dict, Optional
 
 import httpx
 
@@ -15,7 +14,7 @@ from app.verify.base import VerificationError, VerificationProvider, VerifyResul
 logger = logging.getLogger(__name__)
 
 
-def _as_float(value) -> Optional[float]:
+def _as_float(value) -> float | None:
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
@@ -26,7 +25,7 @@ class JustVerifyProvider(VerificationProvider):
     name = "justverify"
     supported_banks = ("cbe", "telebirr", "dashen", "awash", "boa", "cbebirr", "mpesa", "zemen", "siinqee")
 
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://justverify.et"):
+    def __init__(self, api_key: str | None = None, base_url: str = "https://justverify.et"):
         self.api_key = api_key if api_key is not None else settings.justverify_api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = 20.0
@@ -35,7 +34,7 @@ class JustVerifyProvider(VerificationProvider):
     def enabled(self) -> bool:
         return bool(self.api_key)
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -45,27 +44,27 @@ class JustVerifyProvider(VerificationProvider):
         self,
         bank: str,
         reference: str,
-        account_number: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        account_number: str | None = None,
+        idempotency_key: str | None = None,
     ) -> VerifyResult:
         if not self.enabled:
             raise VerificationError("justverify is not configured (no JUSTVERIFY_API_KEY)")
 
-        payload: Dict[str, str] = {"provider": bank, "reference": reference}
+        payload: dict[str, str] = {"provider": bank, "reference": reference}
 
         url = f"{self.base_url}/v1/verify"
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(url, json=payload, headers=self._headers())
-        except Exception as e:
-            logger.exception("justverify request failed: %s", e)
+        except httpx.HTTPError as e:
+            logger.exception("justverify request failed")
             raise VerificationError(f"justverify connection error: {e}")
 
         if response.status_code != 200:
             try:
                 body = response.json()
                 message = body.get("message") if isinstance(body, dict) else ""
-            except Exception:
+            except ValueError:
                 body = {}
                 message = ""
             raise VerificationError(f"justverify HTTP {response.status_code}: {message or response.text[:200]}")

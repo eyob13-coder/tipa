@@ -19,7 +19,7 @@ def test_catalog_contains_expected_methods():
 
 
 def test_every_method_has_display_name_and_deep_link():
-    for code, method in PAYMENT_METHODS.items():
+    for method in PAYMENT_METHODS.values():
         assert method.name
         assert method.deep_link_url.startswith("https://")
         assert method.account_label

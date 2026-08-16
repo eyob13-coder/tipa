@@ -1,7 +1,6 @@
 """Shared verification primitives: normalized result, errors, and the provider interface."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 
 
 class VerificationError(Exception):
@@ -15,8 +14,8 @@ class VerifyResult:
     request_success: bool = False
     verified: bool = False
     status: str = "unknown"  # success | failed | not_found | pending | unknown
-    amount: Optional[float] = None
-    request_id: Optional[str] = None
+    amount: float | None = None
+    request_id: str | None = None
     message: str = ""
     provider: str = ""
 
@@ -47,8 +46,8 @@ class VerificationProvider(ABC):
         self,
         bank: str,
         reference: str,
-        account_number: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        account_number: str | None = None,
+        idempotency_key: str | None = None,
     ) -> VerifyResult:
         """Ask the provider to confirm a transfer by its SMS/receipt reference.
 

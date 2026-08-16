@@ -1,49 +1,49 @@
 import logging
-from typing import Optional
 
 from telegram import BotCommand
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CommandHandler,
     CallbackQueryHandler,
+    CommandHandler,
     ConversationHandler,
-    MessageHandler,
     InlineQueryHandler,
+    MessageHandler,
     PicklePersistence,
     filters,
 )
 from telegram.request import HTTPXRequest
 
-from app.config import settings
 from app.bot.handlers import (
-    start_command,
-    help_command,
-    register_start,
-    payment_method_callback,
-    account_number_received,
-    account_name_received,
-    channel_link_received,
-    confirm_registration_callback,
-    cancel_registration,
-    tip_amount_callback,
-    text_input_handler,
-    mytips_command,
-    channel_post_generator,
-    inline_query_handler,
-    auto_channel_post_handler,
-    addchannel_command,
-    receipt_photo_handler,
-    METHOD_CHOICE,
-    ACCOUNT_NUM,
     ACCOUNT_NAME,
+    ACCOUNT_NUM,
     CHANNEL_LINK,
     CONFIRMATION,
+    METHOD_CHOICE,
+    account_name_received,
+    account_number_received,
+    addchannel_command,
+    auto_channel_post_handler,
+    cancel_registration,
+    channel_link_received,
+    channel_post_generator,
+    confirm_registration_callback,
+    help_command,
+    inline_query_handler,
+    mytips_command,
+    payment_method_callback,
+    receipt_photo_handler,
+    register_start,
+    start_command,
+    text_input_handler,
+    tip_amount_callback,
 )
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-bot_app: Optional[Application] = None
+bot_app: Application | None = None
 
 
 async def post_init_setup(application: Application) -> None:
@@ -59,7 +59,7 @@ async def post_init_setup(application: Application) -> None:
     try:
         await application.bot.set_my_commands(commands)
         logger.info("Registered Telegram Bot Command Menu successfully.")
-    except Exception as e:
+    except TelegramError as e:
         logger.warning(f"Could not register Bot Command Menu: {e}")
 
 

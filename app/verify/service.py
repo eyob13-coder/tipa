@@ -1,13 +1,12 @@
 """Auto-verification service used by both the bot claim flow and the Mini App API."""
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Creator, Tip, VerificationLog
 from app.payment_methods import PROVIDER_BANKS
-from app.verify.base import VerifyResult
+from app.verify.base import VerificationError, VerifyResult
 from app.verify.registry import verify_registry
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ async def log_verification_attempt(
     provider: str,
     status: str,
     verified: bool = False,
-    amount: Optional[float] = None,
+    amount: float | None = None,
     message: str = "",
 ) -> None:
     """Append one row to the verification audit trail."""
@@ -42,7 +41,7 @@ async def log_verification_attempt(
     await session.commit()
 
 
-def _amount_matches(verified_amount: Optional[float], expected: float) -> bool:
+def _amount_matches(verified_amount: float | None, expected: float) -> bool:
     if verified_amount is None:
         return True
     return abs(verified_amount - expected) < 0.01
@@ -53,7 +52,7 @@ async def auto_verify_tip(
     tip: Tip,
     creator: Creator,
     ref_code: str,
-) -> Optional[VerifyResult]:
+) -> VerifyResult | None:
     """Try to confirm a claimed direct transfer across the provider registry.
 
     Providers are tried in priority order with automatic failover (see
@@ -77,8 +76,8 @@ async def auto_verify_tip(
             account_number=account_number,
             idempotency_key=f"{tip.id}-{ref_code}",
         )
-    except Exception as e:
-        logger.exception("verify registry failed for tip %s: %s", tip.id, e)
+    except VerificationError as e:
+        logger.exception("verify registry failed for tip %s", tip.id)
         return VerifyResult(request_success=False, message=str(e))
 
     if result.verified and _amount_matches(result.amount, float(tip.amount)):

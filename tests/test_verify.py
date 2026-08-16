@@ -1,13 +1,14 @@
-import pytest
-from unittest.mock import MagicMock, patch
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.db.models import Creator, Tip
-from app.verify.base import VerificationError, VerifyResult, VerificationProvider
-from app.verify.providers.verify_et import VerifyEtProvider
+from app.verify.base import VerificationError, VerificationProvider, VerifyResult
 from app.verify.providers.check_et import CheckEtProvider
 from app.verify.providers.justverify import JustVerifyProvider
-from app.verify.registry import ProviderRegistry, BANK_PRIORITY
+from app.verify.providers.verify_et import VerifyEtProvider
+from app.verify.registry import BANK_PRIORITY, ProviderRegistry
 from app.verify.service import auto_verify_tip
 
 

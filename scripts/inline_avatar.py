@@ -2,6 +2,7 @@ import base64
 import re
 from pathlib import Path
 
+
 def inline_avatar():
     avatar_path = Path("app/static/avatar.png")
     html_path = Path("app/static/index.html")
