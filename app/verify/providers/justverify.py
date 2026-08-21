@@ -5,6 +5,7 @@ POST /v1/verify with Bearer token. Returns amount, status, and payer info in
 one request — no polling needed.
 """
 import logging
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -14,10 +15,10 @@ from app.verify.base import VerificationError, VerificationProvider, VerifyResul
 logger = logging.getLogger(__name__)
 
 
-def _as_float(value) -> float | None:
+def _as_decimal(value) -> Decimal | None:
     try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
+        return Decimal(str(value)) if value is not None else None
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 
@@ -72,7 +73,7 @@ class JustVerifyProvider(VerificationProvider):
         body = response.json()
         success = bool(body.get("success"))
         status = str(body.get("status") or "unknown")
-        amount = _as_float(body.get("amount"))
+        amount = _as_decimal(body.get("amount"))
 
         if success and status == "completed":
             return VerifyResult(

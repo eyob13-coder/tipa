@@ -5,6 +5,7 @@ One endpoint (POST /verify), Bearer token auth, normalized response across
 CBE, Telebirr, Dashen, Awash, BOA, CBE Birr, M-Pesa, Zemen, and Siinqee.
 """
 import logging
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -14,10 +15,10 @@ from app.verify.base import VerificationError, VerificationProvider, VerifyResul
 logger = logging.getLogger(__name__)
 
 
-def _as_float(value) -> float | None:
+def _as_decimal(value) -> Decimal | None:
     try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
+        return Decimal(str(value)) if value is not None else None
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 
@@ -81,7 +82,7 @@ class CheckEtProvider(VerificationProvider):
         success = bool(body.get("success"))
         data = body.get("data") or {}
         receipt = data.get("receipt") or {}
-        amount = _as_float(receipt.get("amount") or data.get("amount"))
+        amount = _as_decimal(receipt.get("amount") or data.get("amount"))
 
         if success:
             return VerifyResult(

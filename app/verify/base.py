@@ -1,6 +1,7 @@
 """Shared verification primitives: normalized result, errors, and the provider interface."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from decimal import Decimal
 
 
 class VerificationError(Exception):
@@ -14,7 +15,7 @@ class VerifyResult:
     request_success: bool = False
     verified: bool = False
     status: str = "unknown"  # success | failed | not_found | pending | unknown
-    amount: float | None = None
+    amount: Decimal | None = None
     request_id: str | None = None
     message: str = ""
     provider: str = ""

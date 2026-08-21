@@ -25,7 +25,7 @@ async def log_verification_attempt(
     provider: str,
     status: str,
     verified: bool = False,
-    amount: float | None = None,
+    amount: Decimal | None = None,
     message: str = "",
 ) -> None:
     """Append one row to the verification audit trail."""
@@ -87,7 +87,7 @@ async def auto_verify_tip(
         logger.exception("verify registry failed for tip %s", tip.id)
         return VerifyResult(request_success=False, message=str(e))
 
-    if result.verified and _amount_matches(result.amount, float(tip.amount)):
+    if result.verified and _amount_matches(result.amount, tip.amount):
         tip.status = "success"
         tip.verification_method = result.provider
         tip.verified_amount = result.amount

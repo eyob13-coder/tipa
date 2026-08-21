@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from telegram.error import TelegramError
 
 from app.bot.bot import get_telegram_application
@@ -414,7 +415,7 @@ async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_
                 .where(Tip.status != "failed")
             )
             spent = (await session.execute(spent_stmt)).scalar_one()
-            if float(spent) + float(req.amount) > settings.tipper_daily_birr_cap:
+            if Decimal(str(spent)) + req.amount > settings.tipper_daily_birr_cap:
                 raise HTTPException(
                     status_code=429,
                     detail="Daily tipping limit reached. Please try again tomorrow.",
@@ -518,7 +519,15 @@ async def claim_tip_payment(
 
         tip.ref_id = req.ref_code
         tip.claimed_at = datetime.now(timezone.utc)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent claim won the unique race on Tip.ref_id.
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="This reference code was already used for another tip",
+            )
 
         verify_result = await auto_verify_tip(session, tip, creator, req.ref_code)
 

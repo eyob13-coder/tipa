@@ -74,7 +74,10 @@ class Creator(Base):
     # account to Tipa's account, verified like any other payment receipt.
     account_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     account_verification_code: Mapped[str | None] = mapped_column(String, nullable=True)
-    account_verification_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # One payment reference may only ever prove ownership for one creator.
+    account_verification_ref: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True
+    )
     # Admin abuse control: frozen creators cannot receive new tips.
     is_frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # UI language ('en' | 'am').

@@ -8,6 +8,8 @@ from decimal import Decimal, InvalidOperation
 import pytesseract
 from PIL import Image
 from sqlalchemy import desc, func, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -401,7 +403,16 @@ async def process_subscription_claim(
         sub.ref_id = ref_code
         sub.claimed_at = datetime.now(timezone.utc)
         sub.status = SUB_STATUS_PENDING_VERIFICATION
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent claim won the unique race on Subscription.ref_id.
+            await session.rollback()
+            await update.effective_message.reply_text(
+                f"❌ **Duplicate Reference Code**\n\nThe code `{ref_code}` was already used for another Pro payment.",
+                parse_mode="Markdown",
+            )
+            return
 
         verify_result = await auto_verify_subscription(session, sub, ref_code)
 
@@ -663,7 +674,16 @@ async def process_account_verification_claim(
             return
 
         creator.account_verification_ref = ref_code
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent claim won the unique race on account_verification_ref.
+            await session.rollback()
+            await update.effective_message.reply_text(
+                f"❌ The code `{ref_code}` was already used for another verification.",
+                parse_mode="Markdown",
+            )
+            return
 
         result = await _verify_account_deposit(ref_code)
         verified = (
@@ -1765,7 +1785,19 @@ async def process_tip_verification_claim(
         if pending_receipt and pending_receipt[0] == tip_id_str:
             tip.receipt_file_path = pending_receipt[1]
             context.user_data.pop("pending_receipt_path", None)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent claim won the unique race on Tip.ref_id.
+            await session.rollback()
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    f"❌ **Duplicate Reference Code**\n\n"
+                    f"The code `{ref_code}` was already used for another tip. "
+                    f"Please double-check your SMS receipt code and try again.",
+                    parse_mode="Markdown",
+                )
+            return
 
         verify_result = await auto_verify_tip(session, tip, creator, ref_code)
 
@@ -1883,17 +1915,32 @@ async def handle_creator_approval(
         await query.answer()
 
         if is_approve:
-            tip.status = "success"
-            tip.verified_at = datetime.now(timezone.utc)
-            tip.verification_method = "creator_approval"
+            # Atomic transition — two callbacks can pass the status pre-check
+            # concurrently, but only one flips pending_verification -> success;
+            # the loser never double-fires side effects (webhooks, invites).
+            claimed = await session.execute(
+                sa_update(Tip)
+                .where(Tip.id == tip.id, Tip.status == "pending_verification")
+                .values(
+                    status="success",
+                    verified_at=datetime.now(timezone.utc),
+                    verification_method="creator_approval",
+                )
+            )
             await session.commit()
+            if claimed.rowcount != 1:
+                # Lost a concurrent approval/reject race — winner already
+                # answered this callback query, so stay silent.
+                logger.info("Tip %s approval race lost by another callback", tip.id)
+                return
+
             await log_verification_attempt(
                 session,
                 tip_id=tip.id,
                 provider="creator_approval",
                 status="success",
                 verified=True,
-                amount=float(tip.amount),
+                amount=tip.amount,
                 message="Approved manually by the creator",
             )
 
@@ -1957,15 +2004,22 @@ async def handle_creator_approval(
                 except TelegramError as e:
                     logger.error(f"Failed to notify tipper: {e}")
         else:
-            tip.status = "failed"
+            claimed = await session.execute(
+                sa_update(Tip)
+                .where(Tip.id == tip.id, Tip.status == "pending_verification")
+                .values(status="failed")
+            )
             await session.commit()
+            if claimed.rowcount != 1:
+                logger.info("Tip %s rejection race lost by another callback", tip.id)
+                return
             await log_verification_attempt(
                 session,
                 tip_id=tip.id,
                 provider="creator_approval",
                 status="failed",
                 verified=False,
-                amount=float(tip.amount),
+                amount=tip.amount,
                 message="Rejected by the creator",
             )
             await query.edit_message_text(f"❌ **Tip Claim Rejected**\n\nMarked claim for `{tip.ref_id}` as unverified/rejected.")

@@ -9,6 +9,7 @@ engine doubles as the billing engine.
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,7 +84,7 @@ async def log_subscription_verification(
     provider: str,
     status: str,
     verified: bool = False,
-    amount: float | None = None,
+    amount: Decimal | None = None,
     message: str = "",
 ) -> None:
     """Append one row to the verification audit trail for a subscription."""
@@ -153,7 +154,7 @@ async def auto_verify_subscription(
         logger.exception("verify registry failed for subscription %s", sub.id)
         result = VerifyResult(request_success=False, message=str(e))
 
-    verified = result.verified and _amount_matches(result.amount, float(sub.amount))
+    verified = result.verified and _amount_matches(result.amount, sub.amount)
 
     if verified:
         await activate_subscription(session, sub, method=result.provider)

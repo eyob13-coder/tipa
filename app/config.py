@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,7 +15,7 @@ class Settings(BaseSettings):
     justverify_api_key: str = ""
     justverify_base_url: str = "https://justverify.et"
     database_url: str = "sqlite+aiosqlite:///./tipa.db"
-    platform_fee_birr: float = 0.0
+    platform_fee_birr: Decimal = Decimal("0.0")
     bot_username: str = "TipaPayBot"
     tip_reminder_hours: float = 24.0
     tip_expiry_hours: float = 72.0
@@ -24,7 +26,7 @@ class Settings(BaseSettings):
     digest_loop_minutes: float = 60.0
 
     # Tipa Pro subscription (creators pay Tipa directly; same no-custody flow)
-    pro_price_birr: float = 199.0
+    pro_price_birr: Decimal = Decimal("199.0")
     pro_duration_days: int = 30
     # Where creators send the Pro payment (must be a provider-verifiable method)
     tipa_receiving_method: str = "telebirr"
@@ -34,7 +36,7 @@ class Settings(BaseSettings):
 
     # Account ownership proof: creator sends this amount from the registered
     # account to Tipa's account with a coded reference (micro-deposit).
-    account_verification_amount_birr: float = 1.0
+    account_verification_amount_birr: Decimal = Decimal("1.0")
 
     # Receipt screenshots are persisted here as dispute evidence.
     receipt_storage_dir: str = "data/receipts"
@@ -49,9 +51,14 @@ class Settings(BaseSettings):
     # a dev convenience (always on for local SQLite).
     auto_create_tables: bool = False
 
+    # Deployment environment: "development" | "production". In production the
+    # API fails closed — initData validation cannot be skipped and missing
+    # secrets are treated as misconfiguration, not dev convenience.
+    app_env: str = "development"
+
     # Abuse controls: per-tipper velocity limits.
     tipper_hourly_init_limit: int = 10
-    tipper_daily_birr_cap: float = 100000.0
+    tipper_daily_birr_cap: Decimal = Decimal("100000.0")
 
     # Verification provider circuit breaker: after this many consecutive
     # failures a provider is skipped for the cooldown window (seconds).

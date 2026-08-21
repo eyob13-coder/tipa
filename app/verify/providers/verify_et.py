@@ -6,6 +6,7 @@ Submits a reference for verification and polls a queued result until terminal.
 import asyncio
 import logging
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -159,14 +160,14 @@ class VerifyEtProvider(VerificationProvider):
         verified = bool(record.get("verified"))
         amount = record.get("amount")
         try:
-            amount_f = float(amount) if amount is not None else None
-        except (TypeError, ValueError):
-            amount_f = None
+            amount_dec = Decimal(str(amount)) if amount is not None else None
+        except (InvalidOperation, TypeError, ValueError):
+            amount_dec = None
         return VerifyResult(
             request_success=True,
             verified=verified or status == "success",
             status=status,
-            amount=amount_f,
+            amount=amount_dec,
             request_id=request_id,
             message=str(record.get("message") or ""),
         )
