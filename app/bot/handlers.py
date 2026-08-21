@@ -1960,6 +1960,40 @@ async def channel_post_generator(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+async def poster_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a printable A4 QR poster linking to the creator's tipping page."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        creator = (await session.execute(stmt)).scalar_one_or_none()
+
+    if not creator:
+        await update.effective_message.reply_text(
+            "❌ You must register first with `/register` to generate a poster!",
+            parse_mode="Markdown",
+        )
+        return
+
+    bot_name = context.bot.username or settings.bot_username
+    from app.posters import build_poster_pdf, tip_deep_link
+
+    url = tip_deep_link(bot_name, creator.id)
+    pdf = build_poster_pdf(creator, url)
+    await update.effective_message.reply_document(
+        document=io.BytesIO(pdf),
+        filename=f"tipa_poster_{str(creator.id)[:8]}.pdf",
+        caption=(
+            "🖼️ **Your Tip Poster is ready!**\n\n"
+            "Print it for your café, shop, studio, or event table — "
+            "one scan opens your tipping page. A4 size."
+        ),
+        parse_mode="Markdown",
+    )
+
+
 async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle Telegram Inline Mode queries (@TipaPayBot) in any chat/channel."""
     inline_query = update.inline_query

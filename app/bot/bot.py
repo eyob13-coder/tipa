@@ -39,6 +39,7 @@ from app.bot.handlers import (
     mytips_command,
     payment_method_callback,
     payout_start,
+    poster_command,
     pro_command,
     receipt_photo_handler,
     register_start,
@@ -70,6 +71,7 @@ async def post_init_setup(application: Application) -> None:
         BotCommand("verifyaccount", "Prove your payout account is yours"),
         BotCommand("pro", "Upgrade to Tipa Pro (CSV export & more)"),
         BotCommand("export", "Download your tips as CSV or PDF"),
+        BotCommand("poster", "Get a printable QR poster for your tip page"),
         BotCommand("payout", "Switch your payout bank or wallet"),
         BotCommand("help", "Command guide & instructions"),
         BotCommand("cancel", "Cancel current registration or action"),
@@ -133,6 +135,7 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("topfans", topfans_command))
     app.add_handler(CommandHandler("verifyaccount", verifyaccount_command))
     app.add_handler(CommandHandler("export", export_command))
+    app.add_handler(CommandHandler("poster", poster_command))
     app.add_handler(CommandHandler("pro", pro_command))
     app.add_handler(CommandHandler("post", channel_post_generator))
     app.add_handler(CommandHandler("addchannel", addchannel_command))
