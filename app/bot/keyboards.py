@@ -109,6 +109,16 @@ def get_av_transfer_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def get_language_keyboard() -> InlineKeyboardMarkup:
+    """Language picker shown at /start (Amharic is the biggest adoption lever)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+            InlineKeyboardButton("🇪🇹 አማርኛ", callback_data="lang_am"),
+        ]
+    ])
+
+
 def get_admin_account_verification_keyboard(creator_id: str) -> InlineKeyboardMarkup:
     """Manual approval buttons for an account-ownership deposit that couldn't auto-verify."""
     keyboard = [

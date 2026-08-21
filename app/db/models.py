@@ -75,6 +75,10 @@ class Creator(Base):
     account_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     account_verification_code: Mapped[str | None] = mapped_column(String, nullable=True)
     account_verification_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Admin abuse control: frozen creators cannot receive new tips.
+    is_frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # UI language ('en' | 'am').
+    language: Mapped[str] = mapped_column(String(2), nullable=False, default="en")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -109,10 +113,14 @@ class Tip(Base):
         String, nullable=True, unique=True, index=True
     )
     status: Mapped[str] = mapped_column(
-        String, nullable=False, default="pending"
-    )  # 'pending' | 'pending_verification' | 'success' | 'failed'
+        String, nullable=False, default="pending", index=True
+    )  # 'pending' | 'pending_verification' | 'success' | 'failed' | 'disputed'
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     post_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Client-supplied idempotency key: replays return the original tip.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True, index=True
+    )
     claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -118,7 +118,10 @@ async def remind_and_expire_pending_tips(
     expired_ids = []
 
     async with AsyncSessionLocal() as session:
-        stmt = select(Tip).where(Tip.status == "pending_verification")
+        # FOR UPDATE SKIP LOCKED: with multiple app instances each pass claims
+        # disjoint tip sets, so creators never get duplicate reminders. SQLite
+        # (dev) ignores the locking hints, which is fine for a single process.
+        stmt = select(Tip).where(Tip.status == "pending_verification").with_for_update(skip_locked=True)
         res = await session.execute(stmt)
         tips = res.scalars().all()
 

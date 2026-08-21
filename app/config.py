@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     # a dev convenience (always on for local SQLite).
     auto_create_tables: bool = False
 
+    # Abuse controls: per-tipper velocity limits.
+    tipper_hourly_init_limit: int = 10
+    tipper_daily_birr_cap: float = 100000.0
+
+    # Verification provider circuit breaker: after this many consecutive
+    # failures a provider is skipped for the cooldown window (seconds).
+    breaker_failure_threshold: int = 3
+    breaker_cooldown_seconds: float = 60.0
+
+    # Optional error tracking (sentry-sdk is imported only when a DSN is set).
+    sentry_dsn: str = ""
+
     @property
     def admin_ids(self) -> set[int]:
         return {

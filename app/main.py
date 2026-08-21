@@ -30,6 +30,15 @@ BASE_DIR = Path(__file__).resolve().parent
 async def lifespan(app: FastAPI):
     global bot_task
 
+    if settings.sentry_dsn:
+        try:
+            import sentry_sdk
+
+            sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
+            logger.info("Sentry error tracking initialized.")
+        except ImportError:
+            logger.warning("SENTRY_DSN set but sentry-sdk is not installed — skipping.")
+
     # Schema is managed by Alembic in production; create_all only for dev/SQLite.
     if settings.auto_create_tables or settings.database_url.startswith("sqlite"):
         logger.info("Initializing database (create_all)...")
@@ -128,6 +137,24 @@ async def request_logging_middleware(request: Request, call_next):
     )
     return response
 
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Baseline security headers for the Mini App and API.
+
+    The Mini App runs inside Telegram's iframe, so frame-ancestors must allow
+    web.telegram.org (X-Frame-Options would break it entirely).
+    """
+    response = await call_next(request)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "frame-ancestors 'self' https://web.telegram.org https://telegram-web-app.ssl.do;",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("X-XSS-Protection", "0")
+    return response
+
 # Mount static files
 static_path = BASE_DIR / "static"
 if static_path.exists():
@@ -189,6 +216,39 @@ async def ready():
             status_code=503,
             content={"status": "not_ready", "database": "error"},
         )
+
+
+@app.get("/metrics")
+async def metrics():
+    """Lightweight SLO metrics: verification outcomes per provider (last 24h)."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.db.models import VerificationLog
+
+    day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(
+                    VerificationLog.provider,
+                    VerificationLog.status,
+                    func.count(VerificationLog.id),
+                )
+                .where(VerificationLog.created_at >= day_ago)
+                .group_by(VerificationLog.provider, VerificationLog.status)
+            )
+            rows = (await session.execute(stmt)).all()
+    except Exception as e:  # noqa: BLE001 - metrics must never 500 (DB down, DNS, etc.)
+        logger.error("metrics query failed: %s", e)
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+
+    providers: dict[str, dict[str, int]] = {}
+    for provider, status, count in rows:
+        bucket = providers.setdefault(provider, {})
+        bucket[status] = bucket.get(status, 0) + count
+    return {"window_hours": 24, "providers": providers}
 
 
 @app.get("/miniapp", response_class=FileResponse)

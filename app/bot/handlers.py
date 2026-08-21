@@ -28,6 +28,7 @@ from app.bot.keyboards import (
     get_channel_post_button,
     get_confirm_registration_keyboard,
     get_creator_approval_keyboard,
+    get_language_keyboard,
     get_payment_method_selection_keyboard,
     get_subscription_transfer_keyboard,
     get_tip_amount_keyboard,
@@ -39,6 +40,7 @@ from app.config import settings
 from app.db.models import Creator, Subscription, Tip
 from app.db.session import AsyncSessionLocal
 from app.export import build_tips_csv
+from app.i18n import t
 from app.payment_methods import (
     get_method,
     method_name,
@@ -73,6 +75,18 @@ MIN_TIP_BIRR = Decimal(5)
 MAX_TIP_BIRR = Decimal(50000)
 
 
+def _lang(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Active UI language ('en' | 'am') from user_data (persisted for creators)."""
+    return context.user_data.get("lang") or "en"
+
+
+def get_telegram_application_lazy():
+    """Lazy import to dodge the handlers <-> bot module circular import."""
+    from app.bot.bot import get_telegram_application
+
+    return get_telegram_application()
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start and deep linking tip_<creator_id>."""
     if not update.effective_message or not update.effective_user:
@@ -100,18 +114,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 creator = result.scalar_one_or_none()
 
             if creator:
+                if creator.is_frozen:
+                    await update.effective_message.reply_text(
+                        "⚠️ This creator is temporarily unable to receive tips. Please try again later."
+                    )
+                    return
                 if post_id:
                     context.user_data["active_post_id"] = post_id
                 keyboard = get_tip_amount_keyboard(str(creator.id))
                 method_str = method_name(creator.payment_method)
+                lang = creator.language or "en"
+                context.user_data["lang"] = lang
                 post_text = f" for post **#{post_id}**" if post_id else ""
-                await update.effective_message.reply_text(
-                    f"🎁 **Tip {creator.display_name}**{post_text}\n"
-                    f"Payment Method: **{method_str}**\n\n"
-                    f"Choose an amount below to tip directly in Birr (ETB):",
-                    reply_markup=keyboard,
-                    parse_mode="Markdown",
+                intro = t(
+                    lang,
+                    "tip_intro",
+                    creator_name=creator.display_name,
+                    post_text=post_text,
+                    method=method_str,
                 )
+                await update.effective_message.reply_text(intro, reply_markup=keyboard, parse_mode="Markdown")
                 return
             else:
                 await update.effective_message.reply_text("❌ Creator not found or tipping link is invalid.")
@@ -131,32 +153,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     bot_name = context.bot.username or settings.bot_username
     if existing_creator:
+        lang = existing_creator.language or "en"
+        context.user_data["lang"] = lang
         deep_link = f"https://t.me/{bot_name}?start=tip_{existing_creator.id}"
         method_str = method_name(existing_creator.payment_method)
         await update.effective_message.reply_text(
-            f"👋 Welcome back, **{existing_creator.display_name}**!\n"
-            f"Active Payment Method: **{method_str}** (`{existing_creator.account_number}`)\n\n"
-            f"🔗 **Your Personal Channel Tip Link:**\n`{deep_link}`\n\n"
-        f"📌 **Quick Actions:**\n"
-        f"• `/post` — Generate channel post & 1-tap tip button\n"
-        f"• `/mytips` — View your total earnings & supporter notes\n"
-        f"• `/pro` — Upgrade to Tipa Pro (CSV export & more)\n"
-        f"• `/export` — Download your tips as a CSV file (Pro)\n"
-        f"• `/register` — Update your payment details\n"
-        f"• `/help` — Detailed command guide",
+            t(
+                lang,
+                "start_back",
+                display_name=existing_creator.display_name,
+                method=method_str,
+                account_number=existing_creator.account_number,
+                deep_link=deep_link,
+            ),
             parse_mode="Markdown",
         )
     else:
+        lang = _lang(context)
         await update.effective_message.reply_text(
-            f"🎁 **Welcome {user_name} to Tipa (@{bot_name})!**\n"
-            f"Telegram Tipping for Ethiopian Creators via Mobile Money & Banks.\n\n"
-            f"Tipa enables followers to tip channel creators directly in Ethiopian Birr (ETB). "
-            f"Funds flow directly to your Telebirr phone number or bank account — 100% direct and transparent!\n\n"
-            f"🚀 **How to Get Started (Takes 1 Minute):**\n"
-            f"1️⃣ Run `/register` to link your payment account.\n"
-            f"2️⃣ Get your custom tipping deep link (`t.me/{bot_name}?start=tip_<your_id>`).\n"
-            f"3️⃣ Run `/post` or type `@{bot_name}` to attach a tipping button to your channel posts!\n\n"
-            f"👇 **Tap `/register` below to get started!**",
+            t(lang, "start_new", user_name=user_name, bot_name=bot_name) + t(lang, "lang_prompt"),
+            reply_markup=get_language_keyboard(),
             parse_mode="Markdown",
         )
 
@@ -167,21 +183,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     bot_name = context.bot.username or settings.bot_username
-    help_text = (
-        f"📖 **Tipa Bot Command Guide & Help (@{bot_name})**\n\n"
-        f"**Commands Overview (Tap any command to run):**\n\n"
-        f"🚀 /start — Welcome screen & deep link handler. Tapping a creator's tip link starts the tipping flow.\n\n"
-        f"🏦 /register — Register or update your receiving payment method (mobile money or bank). Takes less than 1 minute!\n\n"
-        f"📢 /addchannel — Link your Telegram channel for auto-tipping.\n\n"
-        f"📢 /post — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
-        f"📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
-        f"⭐ /pro — Upgrade to Tipa Pro: CSV export, PRO badge, and early access to new features.\n\n"
-        f"📄 /export — Download your verified tip history as a CSV file (Pro feature).\n\n"
-        f"💬 **Supporter Notes** — Tippers can leave an optional encouraging message/note with their tip.\n\n"
-        f"⚡ **Inline Mode** — Type `@{bot_name}` while composing a post in any Telegram channel to attach a tip button instantly!\n\n"
-        f"❌ /cancel — Cancel any active registration step or tipping session."
+    await update.effective_message.reply_text(
+        t(_lang(context), "help_text", bot_name=bot_name),
+        parse_mode="Markdown",
     )
-    await update.effective_message.reply_text(help_text, parse_mode="Markdown")
 
 
 async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -217,28 +222,23 @@ async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"Renewing now adds **{duration} more days** on top.\n\n"
         )
 
-    benefits = (
-        f"⭐ **Tipa Pro** — {price:g} ETB / {duration} days\n\n"
-        f"{status_line}"
-        f"🔓 **What you unlock:**\n"
-        f"• 📄 CSV export of all your verified tips\n"
-        f"• ⭐ PRO badge on your tipping page\n"
-        f"• 🚀 Early access to new Pro features as they ship\n"
-        f"• ❤️ Directly supports Tipa's development\n"
-    )
-
     method = get_method(settings.tipa_receiving_method) or get_method("telebirr")
     tx_ref = f"pro_{uuid.uuid4().hex[:12]}"
     emoji = "📱" if method.kind == "mobile" else "🏦"
     account_label = method.account_label or ("Phone" if method.kind == "mobile" else "Account Number")
 
-    instructions = (
-        f"{benefits}\n"
-        f"{emoji} **How to pay:**\n"
-        f"Send **{price:g} ETB** to {method.name} `{settings.tipa_receiving_account}` "
-        f"({account_label.lower()}), then submit your receipt reference below.\n\n"
-        f"🔖 Your payment reference code: `{tx_ref}`\n"
-        f"(You'll enter the *SMS receipt code* from {method.name} after paying.)"
+    lang = _lang(context)
+    instructions = t(
+        lang,
+        "pro_pitch",
+        price=f"{price:g}",
+        duration=duration,
+        status_line=status_line,
+        emoji=emoji,
+        method_name=method.name,
+        tipa_account=settings.tipa_receiving_account,
+        account_label=account_label.lower(),
+        tx_ref=tx_ref,
     )
 
     if not creator:
@@ -300,6 +300,35 @@ async def subscription_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer()
         context.user_data.pop("pending_av_ref", None)
         await query.edit_message_text("❌ Verification cancelled. Run `/verifyaccount` anytime!")
+    elif data in ("lang_en", "lang_am"):
+        await query.answer()
+        lang = "am" if data == "lang_am" else "en"
+        context.user_data["lang"] = lang
+        bot_name = context.bot.username or settings.bot_username
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(
+                select(Creator).where(Creator.telegram_id == query.from_user.id)
+            )
+            creator = res.scalar_one_or_none()
+            if creator:
+                creator.language = lang
+                await session.commit()
+                deep_link = f"https://t.me/{bot_name}?start=tip_{creator.id}"
+                text = t(
+                    lang,
+                    "start_back",
+                    display_name=creator.display_name,
+                    method=method_name(creator.payment_method),
+                    account_number=creator.account_number,
+                    deep_link=deep_link,
+                )
+            else:
+                first = query.from_user.first_name or "Creator"
+                text = t(lang, "start_new", user_name=first, bot_name=bot_name)
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown")
+        except TelegramError:
+            pass  # identical text (re-tap same language)
     elif data.startswith(("approve_sub:", "reject_sub:")):
         sub_id_str = data.split(":", 1)[1]
         await handle_admin_subscription_approval(
@@ -574,16 +603,17 @@ async def verifyaccount_command(update: Update, context: ContextTypes.DEFAULT_TY
         creator.account_verification_ref = None
         await session.commit()
         method_str = method_name(creator.payment_method)
+        lang = creator.language or "en"
 
     amount = settings.account_verification_amount_birr
-    instructions = (
-        f"🔐 **Verify Account Ownership**\n\n"
-        f"To protect your tips, prove that `{creator.account_number}` ({method_str}) belongs to you:\n\n"
-        f"1️⃣ Send exactly **{amount:g} ETB** **from your registered {method_str} account** "
-        f"to Tipa's account: `{settings.tipa_receiving_account}`\n"
-        f"2️⃣ If your app allows a note/reference, include: `{code}`\n"
-        f"3️⃣ Tap **I Have Sent the Deposit** below and submit your receipt reference code.\n\n"
-        f"⚠️ The deposit must come from the account you registered — it's checked against your verification code."
+    instructions = t(
+        lang,
+        "verify_instructions",
+        account_number=creator.account_number,
+        method=method_str,
+        amount=f"{amount:g}",
+        tipa_account=settings.tipa_receiving_account,
+        code=code,
     )
 
     await update.effective_message.reply_text(
@@ -772,6 +802,183 @@ async def handle_admin_account_verification(
             )
         except TelegramError as e:
             logger.error("Failed to notify creator about ownership decision: %s", e)
+
+
+async def _find_creator_flexible(session, identifier: str) -> Creator | None:
+    """Look up a creator by UUID or Telegram id (admin tooling helper)."""
+    try:
+        creator_uuid = uuid.UUID(identifier)
+        creator = await session.get(Creator, creator_uuid)
+        if creator:
+            return creator
+    except ValueError:
+        pass
+    if identifier.isdigit():
+        res = await session.execute(select(Creator).where(Creator.telegram_id == int(identifier)))
+        return res.scalar_one_or_none()
+    return None
+
+
+async def freeze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: /freeze <creator_id_or_telegram_id> — block new tips to a creator."""
+    if not update.effective_message or not update.effective_user:
+        return
+    if update.effective_user.id not in settings.admin_ids:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /freeze <creator_id_or_telegram_id>")
+        return
+
+    async with AsyncSessionLocal() as session:
+        creator = await _find_creator_flexible(session, context.args[0])
+        if not creator:
+            await update.effective_message.reply_text("❌ Creator not found.")
+            return
+        creator.is_frozen = True
+        await session.commit()
+        await update.effective_message.reply_text(
+            f"🧊 Frozen: **{creator.display_name}** (`{creator.telegram_id}`) can no longer receive tips.",
+            parse_mode="Markdown",
+        )
+
+
+async def unfreeze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: /unfreeze <creator_id_or_telegram_id> — re-enable tips."""
+    if not update.effective_message or not update.effective_user:
+        return
+    if update.effective_user.id not in settings.admin_ids:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /unfreeze <creator_id_or_telegram_id>")
+        return
+
+    async with AsyncSessionLocal() as session:
+        creator = await _find_creator_flexible(session, context.args[0])
+        if not creator:
+            await update.effective_message.reply_text("❌ Creator not found.")
+            return
+        creator.is_frozen = False
+        await session.commit()
+        await update.effective_message.reply_text(
+            f"🔥 Unfrozen: **{creator.display_name}** (`{creator.telegram_id}`) can receive tips again.",
+            parse_mode="Markdown",
+        )
+
+
+async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: /dispute <tip_id> — flag a tip for review and notify both sides."""
+    if not update.effective_message or not update.effective_user:
+        return
+    if update.effective_user.id not in settings.admin_ids:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /dispute <tip_id>")
+        return
+
+    try:
+        tip_uuid = uuid.UUID(context.args[0])
+    except ValueError:
+        await update.effective_message.reply_text("❌ Invalid tip id.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        tip = await session.get(Tip, tip_uuid)
+        if not tip:
+            await update.effective_message.reply_text("❌ Tip not found.")
+            return
+        if tip.status == "disputed":
+            await update.effective_message.reply_text("⚠️ This tip is already disputed.")
+            return
+        if tip.status not in ("success", "pending_verification"):
+            await update.effective_message.reply_text(
+                f"❌ Only successful or pending-verification tips can be disputed (current: {tip.status})."
+            )
+            return
+
+        previous_status = tip.status
+        tip.status = "disputed"
+        await session.commit()
+        creator = await session.get(Creator, tip.creator_id)
+
+    await update.effective_message.reply_text(
+        f"⚖️ Tip `{tip.id}` marked **disputed** (was: {previous_status}). "
+        f"Evidence on file: {tip.receipt_file_path or 'none'}",
+        parse_mode="Markdown",
+    )
+
+    bot_app = get_telegram_application_lazy()
+    for chat_id, text in (
+        (creator.telegram_id if creator else None, "⚖️ A tip you received is under dispute review. Tipa support may contact you."),
+        (tip.tipper_telegram_id, "⚖️ Your recent tip is under dispute review. Tipa support may contact you."),
+    ):
+        if not chat_id:
+            continue
+        try:
+            await bot_app.bot.send_message(chat_id=chat_id, text=text)
+        except TelegramError as e:
+            logger.error("Failed to notify chat %s about dispute: %s", chat_id, e)
+
+
+async def resolvedispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: /resolvedispute <tip_id> <keep|refund> — close a dispute.
+
+    ``keep`` restores the tip as successful; ``refund`` marks it failed so the
+    record shows the money must be returned outside Tipa (no custody).
+    """
+    if not update.effective_message or not update.effective_user:
+        return
+    if update.effective_user.id not in settings.admin_ids:
+        return
+    if len(context.args) < 2 or context.args[1] not in ("keep", "refund"):
+        await update.effective_message.reply_text("Usage: /resolvedispute <tip_id> <keep|refund>")
+        return
+
+    try:
+        tip_uuid = uuid.UUID(context.args[0])
+    except ValueError:
+        await update.effective_message.reply_text("❌ Invalid tip id.")
+        return
+
+    outcome = context.args[1]
+    async with AsyncSessionLocal() as session:
+        tip = await session.get(Tip, tip_uuid)
+        if not tip:
+            await update.effective_message.reply_text("❌ Tip not found.")
+            return
+        if tip.status != "disputed":
+            await update.effective_message.reply_text("❌ This tip is not under dispute.")
+            return
+
+        tip.status = "success" if outcome == "keep" else "failed"
+        if outcome == "keep" and tip.verified_at is None:
+            tip.verified_at = datetime.now(timezone.utc)
+        await session.commit()
+        creator = await session.get(Creator, tip.creator_id)
+
+    resolution_text = (
+        "kept as successful" if outcome == "keep" else "marked failed (refund handled outside Tipa)"
+    )
+    await update.effective_message.reply_text(
+        f"✅ Dispute on `{tip.id}` resolved: {resolution_text}.", parse_mode="Markdown"
+    )
+
+    bot_app = get_telegram_application_lazy()
+    for chat_id, text in (
+        (
+            creator.telegram_id if creator else None,
+            f"⚖️ The disputed tip was {resolution_text}. Thank you for your patience!",
+        ),
+        (
+            tip.tipper_telegram_id,
+            f"⚖️ The dispute over your tip was resolved: {resolution_text}.",
+        ),
+    ):
+        if not chat_id:
+            continue
+        try:
+            await bot_app.bot.send_message(chat_id=chat_id, text=text)
+        except TelegramError as e:
+            logger.error("Failed to notify chat %s about dispute resolution: %s", chat_id, e)
 
 
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1116,12 +1323,21 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_creator_approval(update, context, tip_id_str, is_approve=False)
 
 
+def _mask_digits(text: str) -> str:
+    """Mask runs of 4+ digits (account/phone numbers in OCR dumps)."""
+    return re.sub(
+        r"\d{4,}",
+        lambda m: m.group()[:2] + "*" * (len(m.group()) - 3) + m.group()[-1],
+        text,
+    )
+
+
 def extract_ref_code_from_image(image_bytes: bytes) -> str | None:
     """Extract a transaction reference number from a receipt screenshot image via OCR & regex."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         ocr_text = pytesseract.image_to_string(img)
-        logger.info(f"OCR Extracted text snippet: {ocr_text[:200]}")
+        logger.info(f"OCR Extracted text snippet: {_mask_digits(ocr_text[:200])}")
 
         patterns = [
             r"\b(TLB[A-Za-z0-9]{7,16})\b",
@@ -1176,17 +1392,13 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if extracted_ref:
         context.user_data.pop("pending_verify_tip_id")
         await update.effective_message.reply_text(
-            f"📸 **Receipt Screenshot Processed!**\n"
-            f"Extracted Reference Code: `{extracted_ref}`\n\n"
-            f"Submitting payment claim for creator verification...",
+            t(_lang(context), "ocr_processed", ref=extracted_ref),
             parse_mode="Markdown",
         )
         await process_tip_verification_claim(update, context, tip_id_str, ref_code=extracted_ref)
     else:
         await update.effective_message.reply_text(
-            "📸 **Receipt Screenshot Received!**\n\n"
-            "We received your payment receipt screenshot. "
-            "Please type or copy-paste your **Reference / SMS Code** (e.g. `TLB12345678` or `FT12345678`) as text below to complete your claim:",
+            t(_lang(context), "ref_prompt"),
             parse_mode="Markdown",
         )
 
@@ -1236,8 +1448,7 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Validate reference code format (must be 6-30 alphanumeric characters)
         if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
             await update.effective_message.reply_text(
-                "⚠️ **Invalid Reference / SMS Code Format**\n\n"
-                "Please enter a valid transaction reference code (e.g. Telebirr `TLB12345678` or CBE `FT12345678`) with at least 6 characters, no spaces or special symbols:",
+                t(_lang(context), "invalid_ref"),
                 parse_mode="Markdown",
             )
             return
@@ -1326,6 +1537,14 @@ async def process_tip_initialization(
                 await update.effective_message.reply_text(msg)
             return
 
+        if creator.is_frozen:
+            msg = "⚠️ This creator is temporarily unable to receive tips. Please try again later."
+            if is_edit and update.callback_query:
+                await update.callback_query.edit_message_text(msg)
+            elif update.effective_message:
+                await update.effective_message.reply_text(msg)
+            return
+
         tx_ref = f"tipa_{uuid.uuid4().hex[:12]}"
         user = update.effective_user
         tipper_id = user.id if user else None
@@ -1359,20 +1578,28 @@ async def process_tip_initialization(
         keyboard = get_transfer_keyboard(method_code, str(tip_record.id))
 
         ussd_line = (
-            f"• **Option 2 (USSD - No app needed):** Dial `{ussd}` on your phone → Send Money → Enter `{creator.account_number}`."
+            t(
+                _lang(context),
+                "pay_ussd_line",
+                ussd=ussd,
+                account_number=creator.account_number,
+            )
             if ussd
             else ""
         )
-        instructions = (
-            f"{emoji} **{method.name} Tip Payment**\n\n"
-            f"👤 Recipient: **{creator.account_name}** ({creator.display_name})\n"
-            f"{emoji} {account_label}: `{creator.account_number}` *(Tap number to copy)*\n"
-            f"💰 Amount to Send: **{amount:g} ETB**{note_display}\n"
-            f"🔖 Reference Code: `{tx_ref}`\n\n"
-            f"**How to Pay:**\n"
-            f"• **Option 1 (App):** Tap **Open {method.name} App** below or open the {method.name} app → Send **{amount:g} ETB** to `{creator.account_number}`.\n"
-            f"{ussd_line}\n\n"
-            f"After sending, tap **I Have Sent the Payment** below to enter your SMS receipt code:"
+        instructions = t(
+            _lang(context),
+            "pay_instructions",
+            emoji=emoji,
+            method_name=method.name,
+            recipient=creator.account_name,
+            creator_name=creator.display_name,
+            account_label=account_label,
+            account_number=creator.account_number,
+            amount=f"{amount:g}",
+            note_display=note_display,
+            tx_ref=tx_ref,
+            ussd_line=ussd_line,
         )
 
         if is_edit and update.callback_query:
@@ -1457,10 +1684,13 @@ async def process_tip_verification_claim(
         if verify_result is not None and verify_result.verified:
             if update.effective_message:
                 await update.effective_message.reply_text(
-                    f"✅ **Tip Payment Verified!**\n\n"
-                    f"Ref/SMS Code: `{ref_code}`\n"
-                    f"Amount: **{float(tip.amount):g} ETB**\n\n"
-                    f"Your tip to **{creator.display_name}** has been confirmed. Thank you for your support! 🙏",
+                    t(
+                        _lang(context),
+                        "tip_verified",
+                        ref=ref_code,
+                        amount=f"{float(tip.amount):g}",
+                        creator_name=creator.display_name,
+                    ),
                     parse_mode="Markdown",
                 )
             await notify_tip_success(str(tip.id))
@@ -1496,10 +1726,13 @@ async def process_tip_verification_claim(
 
     if update.effective_message:
         await update.effective_message.reply_text(
-            f"✅ **Payment Claim Submitted!**\n\n"
-            f"Ref/SMS Code: `{ref_code}`\n"
-            f"Amount: **{float(tip.amount):g} ETB**\n\n"
-            f"We have notified **{creator.display_name}**. Once they verify receipt, your tip will be confirmed! 🙏",
+            t(
+                _lang(context),
+                "claim_submitted",
+                ref=ref_code,
+                amount=f"{float(tip.amount):g}",
+                creator_name=creator.display_name,
+            ),
             parse_mode="Markdown",
         )
 
@@ -1740,34 +1973,40 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     deep_link = f"https://t.me/{context.bot.username}?start=tip_{creator.id}"
     method_str = method_name(creator.payment_method)
+    lang = creator.language or _lang(context)
     if active_sub and active_sub.expires_at:
-        pro_line = f"⭐ **Pro:** active until *{active_sub.expires_at.strftime('%b %d, %Y')}*\n\n"
+        pro_line = t(lang, "pro_line_active", date=active_sub.expires_at.strftime("%b %d, %Y"))
     else:
-        pro_line = "⭐ **Pro:** not active — run `/pro` to upgrade!\n\n"
-    av_line = (
-        ""
-        if creator.account_verified
-        else "⚠️ *Account not verified* — run `/verifyaccount` so tippers can trust your payouts.\n\n"
-    )
+        pro_line = t(lang, "pro_line_inactive")
+    av_line = "" if creator.account_verified else t(lang, "av_line_unverified")
     text = (
-        f"📊 **Creator Dashboard — {creator.display_name}**\n"
-        f"Payment Method: **{method_str}** (`{creator.account_number}`)\n\n"
-        f"💰 **Total Tips Earned:** `{float(total_amount):,.2f} ETB`\n"
-        f"🎉 **Total Tips Received:** `{total_count}`\n"
-        f"{pro_line}"
-        f"{av_line}"
-        f"🔗 **Your Tip Link:**\n`{deep_link}`\n\n"
+        t(
+            lang,
+            "mytips_dashboard",
+            display_name=creator.display_name,
+            method=method_str,
+            account_number=creator.account_number,
+            total=f"{float(total_amount):,.2f}",
+            count=total_count,
+            pro_line=pro_line,
+            av_line=av_line,
+            deep_link=deep_link,
+        )
     )
 
     if recent_tips:
-        text += "📜 **Recent Tips:**\n"
-        for t in recent_tips:
-            tipper = t.tipper_display_name or "Anonymous"
-            note_str = f" (*\"{t.note}\"*)" if t.note else ""
-            date_str = t.verified_at.strftime("%Y-%m-%d %H:%M") if t.verified_at else t.created_at.strftime("%Y-%m-%d %H:%M")
-            text += f"• **{float(t.amount):g} ETB** from {tipper}{note_str} ({date_str})\n"
+        text += t(lang, "recent_tips_header")
+        for tip_row in recent_tips:
+            tipper = tip_row.tipper_display_name or "Anonymous"
+            note_str = f" (*\"{tip_row.note}\"*)" if tip_row.note else ""
+            date_str = (
+                tip_row.verified_at.strftime("%Y-%m-%d %H:%M")
+                if tip_row.verified_at
+                else tip_row.created_at.strftime("%Y-%m-%d %H:%M")
+            )
+            text += f"• **{float(tip_row.amount):g} ETB** from {tipper}{note_str} ({date_str})\n"
     else:
-        text += "💡 *No successful tips yet. Share your tip link in your Telegram channel to start receiving tips!*"
+        text += t(lang, "no_tips_yet")
 
     await update.effective_message.reply_text(text, parse_mode="Markdown")
 

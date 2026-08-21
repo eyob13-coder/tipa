@@ -90,34 +90,42 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-async def limit_claim_rate(request: Request) -> None:
-    """Fixed-window rate limit on the claim endpoint per client IP.
+async def _consume_rate_bucket(key: str, limit: int, window_seconds: float) -> bool:
+    """Consume one unit from a DB-backed fixed-window bucket.
 
-    Counters live in the database so the limit is shared across uvicorn
-    workers and replicas (the old in-memory deque reset on every restart,
-    was per-process, and leaked an entry for every client IP).
+    Returns False when the caller exceeded ``limit`` within the window.
+    Counters live in the database so limits are shared across uvicorn workers
+    and replicas (the old in-memory deque reset on every restart, was
+    per-process, and leaked an entry for every client IP).
     """
-    client_ip = request.client.host if request.client else "unknown"
-    key = f"claim:{client_ip}"
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:
         stmt = select(RateLimitBucket).where(RateLimitBucket.key == key)
         row = (await session.execute(stmt)).scalar_one_or_none()
 
-        if row is None or _as_utc(row.window_started_at) <= now - timedelta(seconds=CLAIM_RATE_WINDOW_SECONDS):
+        if row is None or _as_utc(row.window_started_at) <= now - timedelta(seconds=window_seconds):
             if row is None:
                 session.add(RateLimitBucket(key=key, window_started_at=now, count=1))
             else:
                 row.window_started_at = now
                 row.count = 1
             await session.commit()
-            return
+            return True
 
         row.count += 1
         await session.commit()
-        if row.count > CLAIM_RATE_LIMIT:
-            raise HTTPException(status_code=429, detail="Too many claims. Please try again later.")
+        return row.count <= limit
+
+
+async def limit_claim_rate(request: Request) -> None:
+    """Fixed-window rate limit on the claim endpoint per client IP."""
+    client_ip = request.client.host if request.client else "unknown"
+    allowed = await _consume_rate_bucket(
+        f"claim:{client_ip}", CLAIM_RATE_LIMIT, CLAIM_RATE_WINDOW_SECONDS
+    )
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many claims. Please try again later.")
 
 
 router = APIRouter(prefix="/api", tags=["miniapp"])
@@ -130,6 +138,8 @@ class TipInitRequest(BaseModel):
     post_id: str | None = None
     tipper_telegram_id: int | None = None
     tipper_display_name: str | None = None
+    # Client-generated key (e.g. UUID) so a double-tap can't create ghost tips.
+    idempotency_key: str | None = Field(default=None, max_length=100)
 
 
 class TipClaimRequest(BaseModel):
@@ -267,11 +277,22 @@ async def export_creator_tips_csv(
 
 @router.post("/tip/initialize")
 async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_valid_init_data)):
-    """Initialize tip session from Mini App."""
+    """Initialize tip session from Mini App (idempotent via idempotency_key)."""
     try:
         creator_uuid = uuid.UUID(req.creator_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid creator_id format")
+
+    # Velocity controls (only enforceable for identified tippers).
+    if req.tipper_telegram_id is not None:
+        allowed = await _consume_rate_bucket(
+            f"tipinit:{req.tipper_telegram_id}", settings.tipper_hourly_init_limit, 3600.0
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many tips started recently. Please try again later.",
+            )
 
     async with AsyncSessionLocal() as session:
         stmt = select(Creator).where(Creator.id == creator_uuid)
@@ -280,6 +301,34 @@ async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_
 
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
+
+        if creator.is_frozen:
+            raise HTTPException(
+                status_code=403,
+                detail="This creator is temporarily unable to receive tips. Contact support if you believe this is a mistake.",
+            )
+
+        if req.tipper_telegram_id is not None:
+            day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+            spent_stmt = (
+                select(func.coalesce(func.sum(Tip.amount), 0))
+                .where(Tip.tipper_telegram_id == req.tipper_telegram_id)
+                .where(Tip.created_at >= day_ago)
+                .where(Tip.status != "failed")
+            )
+            spent = (await session.execute(spent_stmt)).scalar_one()
+            if float(spent) + float(req.amount) > settings.tipper_daily_birr_cap:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Daily tipping limit reached. Please try again tomorrow.",
+                )
+
+        # Idempotency: a replayed request returns the original tip untouched.
+        if req.idempotency_key:
+            existing_stmt = select(Tip).where(Tip.idempotency_key == req.idempotency_key)
+            existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+            if existing is not None:
+                return _tip_init_response(existing, creator)
 
         tx_ref = f"tipa_{uuid.uuid4().hex[:12]}"
         tip = Tip(
@@ -292,28 +341,33 @@ async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_
             status="pending",
             note=req.note,
             post_id=req.post_id,
+            idempotency_key=req.idempotency_key,
         )
         session.add(tip)
         await session.commit()
         await session.refresh(tip)
 
-        method = creator.payment_method
-        method_info = get_method(method)
+        return _tip_init_response(tip, creator)
 
-        return {
-            "tip_id": str(tip.id),
-            "tx_ref": tx_ref,
-            "amount": req.amount,
-            "note": req.note,
-            "creator_name": creator.display_name,
-            "payment_method": method,
-            "payment_method_name": method_info.name if method_info else method.upper(),
-            "account_number": creator.account_number,
-            "account_name": creator.account_name,
-            "account_label": account_label_for(method),
-            "ussd_code": ussd_code_for(method),
-            "deep_link_url": deep_link_for(method),
-        }
+
+def _tip_init_response(tip: Tip, creator: Creator) -> dict:
+    method = creator.payment_method
+    method_info = get_method(method)
+
+    return {
+        "tip_id": str(tip.id),
+        "tx_ref": tip.tx_ref,
+        "amount": float(tip.amount),
+        "note": tip.note,
+        "creator_name": creator.display_name,
+        "payment_method": method,
+        "payment_method_name": method_info.name if method_info else method.upper(),
+        "account_number": creator.account_number,
+        "account_name": creator.account_name,
+        "account_label": account_label_for(method),
+        "ussd_code": ussd_code_for(method),
+        "deep_link_url": deep_link_for(method),
+    }
 
 
 @router.post("/tip/claim")
@@ -342,6 +396,15 @@ async def claim_tip_payment(
 
         if not creator:
             raise HTTPException(status_code=404, detail="Creator not found")
+
+        # A tip can only be claimed once — replays must not overwrite the ref.
+        if tip.ref_id is not None or tip.claimed_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="This tip was already claimed. Check its status instead of re-submitting.",
+            )
+        if tip.status == "disputed":
+            raise HTTPException(status_code=409, detail="This tip is under dispute review")
 
         dup_stmt = (
             select(Tip.id)

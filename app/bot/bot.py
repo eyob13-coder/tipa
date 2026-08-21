@@ -29,7 +29,9 @@ from app.bot.handlers import (
     channel_link_received,
     channel_post_generator,
     confirm_registration_callback,
+    dispute_command,
     export_command,
+    freeze_command,
     help_command,
     inline_query_handler,
     mytips_command,
@@ -37,10 +39,12 @@ from app.bot.handlers import (
     pro_command,
     receipt_photo_handler,
     register_start,
+    resolvedispute_command,
     start_command,
     subscription_callback,
     text_input_handler,
     tip_amount_callback,
+    unfreeze_command,
     verifyaccount_command,
 )
 from app.config import settings
@@ -121,11 +125,18 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("addchannel", addchannel_command))
     app.add_handler(MessageHandler(filters.FORWARDED, addchannel_command))
 
-    # Tipa Pro / account-verification payment claims, cancels, and admin approvals
+    # Admin-only abuse-control & dispute tooling (handlers self-check admin ids)
+    app.add_handler(CommandHandler("freeze", freeze_command))
+    app.add_handler(CommandHandler("unfreeze", unfreeze_command))
+    app.add_handler(CommandHandler("dispute", dispute_command))
+    app.add_handler(CommandHandler("resolvedispute", resolvedispute_command))
+
+    # Tipa Pro / account-verification payment claims, language picker,
+    # cancels, and admin approvals
     app.add_handler(
         CallbackQueryHandler(
             subscription_callback,
-            pattern=r"^(pro_|av_|approve_sub:|reject_sub:|approve_av:|reject_av:)",
+            pattern=r"^(pro_|av_|lang_|approve_sub:|reject_sub:|approve_av:|reject_av:)",
         )
     )
 

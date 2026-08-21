@@ -7,7 +7,9 @@ not-found/failed — stops the chain: we never ask a second provider to override
 a definitive negative.
 """
 import logging
+import time
 
+from app.config import settings
 from app.verify.base import VerificationError, VerificationProvider, VerifyResult
 from app.verify.providers.check_et import CheckEtProvider
 from app.verify.providers.justverify import JustVerifyProvider
@@ -37,11 +39,24 @@ class ProviderRegistry:
         self,
         providers: list[VerificationProvider] | None = None,
         priority: dict[str, tuple[str, ...]] | None = None,
+        failure_threshold: int | None = None,
+        cooldown_seconds: float | None = None,
     ):
         self._providers: dict[str, VerificationProvider] = {
             p.name: p for p in (providers or self._default_providers())
         }
         self._priority = priority or BANK_PRIORITY
+        # Circuit breaker: after N consecutive failures a provider is skipped
+        # for a cooldown window, so a dead verify.et doesn't get retried first
+        # on every single request.
+        self._failure_threshold = (
+            failure_threshold if failure_threshold is not None else settings.breaker_failure_threshold
+        )
+        self._cooldown_seconds = (
+            cooldown_seconds if cooldown_seconds is not None else settings.breaker_cooldown_seconds
+        )
+        self._consecutive_failures: dict[str, int] = {}
+        self._open_until: dict[str, float] = {}
 
     @staticmethod
     def _default_providers() -> list[VerificationProvider]:
@@ -50,6 +65,29 @@ class ProviderRegistry:
     @property
     def enabled_providers(self) -> list[VerificationProvider]:
         return [p for p in self._providers.values() if p.enabled]
+
+    def _breaker_open(self, name: str) -> bool:
+        until = self._open_until.get(name)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            # Cooldown elapsed — half-open: give the provider one more shot.
+            del self._open_until[name]
+            self._consecutive_failures[name] = self._failure_threshold - 1
+            return False
+        return True
+
+    def _record_failure(self, name: str) -> None:
+        count = self._consecutive_failures.get(name, 0) + 1
+        self._consecutive_failures[name] = count
+        if count >= self._failure_threshold:
+            self._open_until[name] = time.monotonic() + self._cooldown_seconds
+            logger.warning(
+                "verification provider %s opened circuit breaker for %.0fs after %d failures",
+                name,
+                self._cooldown_seconds,
+                count,
+            )
 
     def providers_for(self, bank: str) -> list[VerificationProvider]:
         order = self._priority.get(bank, tuple(self._providers))
@@ -66,6 +104,9 @@ class ProviderRegistry:
         for provider in self.providers_for(bank):
             if not provider.enabled or bank not in provider.supported_banks:
                 continue
+            if self._breaker_open(provider.name):
+                logger.info("skipping verification provider %s (breaker open)", provider.name)
+                continue
             try:
                 result = await provider.verify_payment(
                     bank=bank,
@@ -75,8 +116,10 @@ class ProviderRegistry:
                 )
             except VerificationError as e:
                 logger.warning("verification provider %s failed, trying next: %s", provider.name, e)
+                self._record_failure(provider.name)
                 attempts.append(VerifyResult(provider=provider.name, message=str(e)))
                 continue
+            self._consecutive_failures[provider.name] = 0
             result.provider = provider.name
             if result.conclusive:
                 return result
