@@ -72,14 +72,35 @@ def require_valid_init_data(x_telegram_init_data: str = Header(default="")) -> s
     """Dependency: reject Mini App calls that don't carry valid Telegram initData.
 
     When ``BOT_TOKEN`` is unset (local dev / CI) validation is skipped so the
-    app stays runnable outside Telegram; in production every /api call must be
-    signed by Telegram.
+    app stays runnable outside Telegram — but never in production, where a
+    missing token must fail closed instead of leaving the API unauthenticated.
     """
     if not settings.bot_token:
+        if settings.is_production:
+            # Misconfiguration: fail closed, do not serve unauthenticated API.
+            logger.error("BOT_TOKEN is unset in production — refusing Mini App requests")
+            raise HTTPException(
+                status_code=503,
+                detail="Server authentication is not configured. Contact support.",
+            )
         return x_telegram_init_data
     if not validate_telegram_init_data(x_telegram_init_data):
         raise HTTPException(status_code=401, detail="Missing or invalid Telegram initData")
     return x_telegram_init_data
+
+
+def verified_tipper_id(init_data: str) -> int | None:
+    """The Telegram user id proven by initData signature, when validation is active.
+
+    Returns None only in dev mode (no BOT_TOKEN), where the request body's
+    self-declared tipper id is used as a best-effort fallback.
+    """
+    telegram_user_id = parse_init_data_user(init_data)
+    if telegram_user_id is not None:
+        return telegram_user_id
+    if not settings.bot_token and not settings.is_production:
+        return None  # dev/CI without a bot token: no cryptographic identity available
+    raise HTTPException(status_code=401, detail="Missing or invalid Telegram initData")
 
 
 CLAIM_RATE_LIMIT = 10
@@ -136,10 +157,10 @@ router = APIRouter(prefix="/api", tags=["miniapp"])
 class TipInitRequest(BaseModel):
     creator_id: str
     amount: Decimal = Field(..., gt=0, le=Decimal(50000))
-    note: str | None = None
-    post_id: str | None = None
+    note: str | None = Field(default=None, max_length=280)
+    post_id: str | None = Field(default=None, max_length=100)
     tipper_telegram_id: int | None = None
-    tipper_display_name: str | None = None
+    tipper_display_name: str | None = Field(default=None, max_length=64)
     # Client-generated key (e.g. UUID) so a double-tap can't create ghost tips.
     idempotency_key: str | None = Field(default=None, max_length=100)
 
@@ -374,17 +395,27 @@ async def export_creator_tips_pdf(
 
 
 @router.post("/tip/initialize")
-async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_valid_init_data)):
-    """Initialize tip session from Mini App (idempotent via idempotency_key)."""
+async def initialize_tip(req: TipInitRequest, init_data: str = Depends(require_valid_init_data)):
+    """Initialize tip session from Mini App (idempotent via idempotency_key).
+
+    The tipper identity comes from the initData signature — never from the
+    request body, which any authenticated client could forge to bypass the
+    daily cap or misattribute tips.
+    """
     try:
         creator_uuid = uuid.UUID(req.creator_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid creator_id format")
 
+    tipper_id = verified_tipper_id(init_data)
+    if tipper_id is None:
+        # Dev/CI only (no BOT_TOKEN): fall back to the self-declared body id.
+        tipper_id = req.tipper_telegram_id
+
     # Velocity controls (only enforceable for identified tippers).
-    if req.tipper_telegram_id is not None:
+    if tipper_id is not None:
         allowed = await _consume_rate_bucket(
-            f"tipinit:{req.tipper_telegram_id}", settings.tipper_hourly_init_limit, 3600.0
+            f"tipinit:{tipper_id}", settings.tipper_hourly_init_limit, 3600.0
         )
         if not allowed:
             raise HTTPException(
@@ -406,11 +437,11 @@ async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_
                 detail="This creator is temporarily unable to receive tips. Contact support if you believe this is a mistake.",
             )
 
-        if req.tipper_telegram_id is not None:
+        if tipper_id is not None:
             day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
             spent_stmt = (
                 select(func.coalesce(func.sum(Tip.amount), 0))
-                .where(Tip.tipper_telegram_id == req.tipper_telegram_id)
+                .where(Tip.tipper_telegram_id == tipper_id)
                 .where(Tip.created_at >= day_ago)
                 .where(Tip.status != "failed")
             )
@@ -429,10 +460,11 @@ async def initialize_tip(req: TipInitRequest, _init_data: str = Depends(require_
                 return _tip_init_response(existing, creator)
 
         tx_ref = f"tipa_{uuid.uuid4().hex[:12]}"
+        display_name = (req.tipper_display_name or "Anonymous").strip()
         tip = Tip(
             creator_id=creator.id,
-            tipper_telegram_id=req.tipper_telegram_id,
-            tipper_display_name=req.tipper_display_name or "Anonymous",
+            tipper_telegram_id=tipper_id,
+            tipper_display_name=display_name[:64] or "Anonymous",
             amount=req.amount,
             platform_fee=settings.platform_fee_birr,
             tx_ref=tx_ref,
@@ -471,7 +503,7 @@ def _tip_init_response(tip: Tip, creator: Creator) -> dict:
 @router.post("/tip/claim")
 async def claim_tip_payment(
     req: TipClaimRequest,
-    _init_data: str = Depends(require_valid_init_data),
+    init_data: str = Depends(require_valid_init_data),
     _rate_limited: None = Depends(limit_claim_rate),
 ):
     """Claim payment sent with SMS/receipt reference code from Mini App."""
@@ -480,6 +512,8 @@ async def claim_tip_payment(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid tip_id format")
 
+    claimer_id = verified_tipper_id(init_data)
+
     async with AsyncSessionLocal() as session:
         stmt = select(Tip).where(Tip.id == tip_uuid)
         res = await session.execute(stmt)
@@ -487,6 +521,11 @@ async def claim_tip_payment(
 
         if not tip:
             raise HTTPException(status_code=404, detail="Tip session not found")
+
+        # A tip session belongs to the tipper who opened it — a verified user
+        # cannot attach their payment to someone else's pending tip.
+        if claimer_id is not None and tip.tipper_telegram_id not in (None, claimer_id):
+            raise HTTPException(status_code=403, detail="You can only claim your own tip")
 
         c_stmt = select(Creator).where(Creator.id == tip.creator_id)
         c_res = await session.execute(c_stmt)
@@ -519,6 +558,9 @@ async def claim_tip_payment(
 
         tip.ref_id = req.ref_code
         tip.claimed_at = datetime.now(timezone.utc)
+        if claimer_id is not None and tip.tipper_telegram_id is None:
+            # Attribute the tip now that we have a verified identity.
+            tip.tipper_telegram_id = claimer_id
         try:
             await session.commit()
         except IntegrityError:

@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -52,6 +53,19 @@ async def lifespan(app: FastAPI):
         await init_db()
     else:
         logger.info("Skipping create_all — schema managed by Alembic migrations.")
+
+    # Fail-closed guards: make misconfiguration loud instead of silently open.
+    if settings.is_production:
+        if not settings.bot_token:
+            logger.error(
+                "APP_ENV=production without BOT_TOKEN — the Mini App API rejects "
+                "all requests (fail closed) until a token is configured."
+            )
+        if settings.telegram_webhook_url and not settings.telegram_webhook_secret:
+            logger.warning(
+                "TELEGRAM_WEBHOOK_URL is set but TELEGRAM_WEBHOOK_SECRET is empty — "
+                "the webhook endpoint will reject every update."
+            )
 
     # Initialize Telegram Bot
     if settings.bot_token and settings.bot_token != "sandbox_bot_token":
@@ -199,7 +213,8 @@ async def telegram_webhook(request: Request):
     if not settings.telegram_webhook_url:
         raise HTTPException(status_code=404, detail="Webhook mode is disabled")
     secret = settings.telegram_webhook_secret
-    if not secret or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+    provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not secret or not hmac.compare_digest(secret.encode(), provided.encode()):
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     data = await request.json()

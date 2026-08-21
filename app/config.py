@@ -83,6 +83,10 @@ class Settings(BaseSettings):
         }
 
     @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() in ("production", "prod")
+
+    @property
     def get_database_url(self) -> str:
         url = self.database_url
         if url.startswith("postgres://"):

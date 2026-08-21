@@ -99,16 +99,18 @@ async def test_unique_backstops_exist_in_schema():
 
 @pytest.mark.asyncio
 async def test_api_claim_reused_reference_rejected(monkeypatch):
+    import sys
+
     from fastapi import HTTPException
 
     from app.api.routes import TipClaimRequest, claim_tip_payment
-
-    monkeypatch.setattr("app.api.routes.AsyncSessionLocal", None)  # guard: must be patched below
+    from app.config import settings as app_settings
 
     engine, factory = await _make_factory()
     monkeypatch.setattr("app.api.routes.AsyncSessionLocal", factory)
+    # Deterministic identity: fixed dev bot token for initData signing.
+    monkeypatch.setattr(app_settings, "bot_token", "12345:test-token")
 
-    creator = creator_row = None
     async with factory() as session:
         creator_row = _creator(telegram_id=111)
         session.add(creator_row)
@@ -141,8 +143,11 @@ async def test_api_claim_reused_reference_rejected(monkeypatch):
         await session.refresh(tip_b)
 
     req = TipClaimRequest(tip_id=str(tip_b.id), ref_code="REFX1")
+    # Sign initData as tip B's owner (user 888) with the configured bot token.
+    conftest = sys.modules["conftest"]
+    init_data = conftest.make_init_data(app_settings.bot_token, 888)
     with pytest.raises(HTTPException) as exc_info:
-        await claim_tip_payment(req, "", lambda: None)
+        await claim_tip_payment(req, init_data, lambda: None)
     assert exc_info.value.status_code == 409
     await engine.dispose()
 
