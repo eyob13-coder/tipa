@@ -10,6 +10,7 @@ from app.bot.keyboards import get_creator_approval_keyboard
 from app.config import settings
 from app.db.models import Creator, Tip
 from app.db.session import AsyncSessionLocal
+from app.subscriptions import expire_due_subscriptions
 
 logger = logging.getLogger(__name__)
 
@@ -163,4 +164,10 @@ async def run_tip_reminder_loop() -> None:
             raise
         except Exception:
             logger.exception("Tip reminder loop error")
+        try:
+            await expire_due_subscriptions()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Subscription expiry loop error")
         await asyncio.sleep(settings.tip_reminder_loop_minutes * 60)

@@ -119,6 +119,18 @@
       text-transform: uppercase;
     }
 
+    .pro-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(250, 204, 21, 0.18);
+      color: #facc15;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     /* Amount Chips */
     .section-label {
       font-size: 13px;
@@ -391,7 +403,7 @@
         <div class="creator-profile" style="margin-bottom: 16px;">
           <div class="avatar-circle" id="dashboard-avatar">C</div>
           <div>
-            <div class="creator-name" id="dashboard-name">Creator Dashboard</div>
+            <div class="creator-name" id="dashboard-name">Creator Dashboard<span id="pro-badge" class="pro-badge hidden">⭐ PRO</span></div>
             <div class="method-badge" id="dashboard-method">Active</div>
           </div>
         </div>
@@ -521,6 +533,7 @@
         avatarEl.innerText = creator.display_name.charAt(0).toUpperCase();
       }
       document.getElementById('dashboard-method').innerText = creator.payment_method.toUpperCase();
+      document.getElementById('pro-badge').classList.toggle('hidden', !creator.is_pro);
       document.getElementById('stat-total-earned').innerText = creator.total_earned.toFixed(2) + " ETB";
       document.getElementById('stat-total-count').innerText = creator.total_count;
 

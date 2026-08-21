@@ -19,6 +19,23 @@ class Settings(BaseSettings):
     tip_expiry_hours: float = 72.0
     tip_reminder_loop_minutes: float = 30.0
 
+    # Tipa Pro subscription (creators pay Tipa directly; same no-custody flow)
+    pro_price_birr: float = 199.0
+    pro_duration_days: int = 30
+    # Where creators send the Pro payment (must be a provider-verifiable method)
+    tipa_receiving_method: str = "telebirr"
+    tipa_receiving_account: str = ""
+    # Comma-separated Telegram user ids that can manually approve Pro payments
+    admin_telegram_ids: str = ""
+
+    @property
+    def admin_ids(self) -> set[int]:
+        return {
+            int(part.strip())
+            for part in self.admin_telegram_ids.split(",")
+            if part.strip().isdigit()
+        }
+
     @property
     def get_database_url(self) -> str:
         url = self.database_url

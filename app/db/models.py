@@ -74,6 +74,9 @@ class Creator(Base):
     )
 
     tips: Mapped[list["Tip"]] = relationship("Tip", back_populates="creator", lazy="selectin", cascade="all, delete-orphan")
+    subscriptions: Mapped[list["Subscription"]] = relationship(
+        "Subscription", back_populates="creator", lazy="selectin", cascade="all, delete-orphan"
+    )
 
 
 class Tip(Base):
@@ -126,14 +129,50 @@ class Tip(Base):
     creator: Mapped["Creator"] = relationship("Creator", back_populates="tips")
 
 
+class Subscription(Base):
+    """A creator's Tipa Pro subscription purchase attempt and lifecycle.
+
+    Creators pay Tipa directly (same no-custody direct-transfer flow as tips).
+    A row starts as ``pending`` when /pro shows payment instructions, moves to
+    ``pending_verification`` once a receipt reference is claimed, then either
+    auto-verifies via a provider or is approved manually by an admin.
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    plan: Mapped[str] = mapped_column(String, nullable=False, default="pro")
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="pending", index=True
+    )  # 'pending' | 'pending_verification' | 'active' | 'expired' | 'rejected'
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    tx_ref: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    ref_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    verification_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    creator: Mapped["Creator"] = relationship("Creator", back_populates="subscriptions")
+
+
 class VerificationLog(Base):
-    """Append-only audit trail of every verification attempt on a tip."""
+    """Append-only audit trail of every verification attempt on a tip or subscription."""
 
     __tablename__ = "verification_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    tip_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("tips.id", ondelete="CASCADE"), nullable=False, index=True
+    tip_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("tips.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=True, index=True
     )
     provider: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)

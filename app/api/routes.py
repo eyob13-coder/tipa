@@ -29,6 +29,7 @@ from app.payment_methods import (
     method_name,
     ussd_code_for,
 )
+from app.subscriptions import is_pro
 from app.verify.service import auto_verify_tip
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,8 @@ async def get_creator_profile(identifier: str, _init_data: str = Depends(require
         bot_username = settings.bot_username
         deep_link = f"https://t.me/{bot_username}?start=tip_{creator.id}"
 
+        creator_is_pro = await is_pro(session, creator.id)
+
         return {
             "id": str(creator.id),
             "telegram_id": creator.telegram_id,
@@ -182,6 +185,7 @@ async def get_creator_profile(identifier: str, _init_data: str = Depends(require
             "account_number": creator.account_number,
             "account_name": creator.account_name,
             "deep_link": deep_link,
+            "is_pro": creator_is_pro,
             "total_earned": float(total_amount),
             "total_count": total_count,
             "recent_tips": tips_data,
@@ -215,6 +219,12 @@ async def export_creator_tips_csv(
         telegram_user_id = parse_init_data_user(init_data)
         if telegram_user_id is None or telegram_user_id != creator.telegram_id:
             raise HTTPException(status_code=403, detail="You can only export your own tips")
+
+        if not await is_pro(session, creator.id):
+            raise HTTPException(
+                status_code=402,
+                detail="CSV export is a Tipa Pro feature. Upgrade with /pro in the bot.",
+            )
 
         stmt = (
             select(Tip)

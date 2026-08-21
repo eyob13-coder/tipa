@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.config import settings
 from app.payment_methods import PAYMENT_METHODS, PaymentMethod, get_method
 
 
@@ -71,6 +72,30 @@ def get_creator_approval_keyboard(tip_id: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("✅ Approve Tip", callback_data=f"approve_tip:{tip_id}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"reject_tip:{tip_id}"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_subscription_transfer_keyboard() -> InlineKeyboardMarkup:
+    """Buttons for the Tipa Pro payment step (pay Tipa directly, then claim)."""
+    method: PaymentMethod = get_method(settings.tipa_receiving_method) or get_method("telebirr")
+    keyboard = []
+    if method.android_url:
+        keyboard.append([InlineKeyboardButton("📱 Open Android App", url=method.android_url)])
+    if method.ios_url:
+        keyboard.append([InlineKeyboardButton("📱 Open iPhone App", url=method.ios_url)])
+    keyboard.append([InlineKeyboardButton("✅ I Have Sent the Payment", callback_data="pro_sent")])
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="pro_cancel")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_admin_subscription_keyboard(subscription_id: str) -> InlineKeyboardMarkup:
+    """Manual approval buttons sent to admins when a Pro payment can't auto-verify."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Approve Pro", callback_data=f"approve_sub:{subscription_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject_sub:{subscription_id}"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)

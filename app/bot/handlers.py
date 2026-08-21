@@ -21,23 +21,35 @@ from telegram.ext import (
 )
 
 from app.bot.keyboards import (
+    get_admin_subscription_keyboard,
     get_channel_post_button,
     get_confirm_registration_keyboard,
     get_creator_approval_keyboard,
     get_payment_method_selection_keyboard,
+    get_subscription_transfer_keyboard,
     get_tip_amount_keyboard,
     get_tip_note_prompt_keyboard,
     get_transfer_keyboard,
 )
 from app.bot.notifications import notify_tip_success
 from app.config import settings
-from app.db.models import Creator, Tip
+from app.db.models import Creator, Subscription, Tip
 from app.db.session import AsyncSessionLocal
 from app.export import build_tips_csv
 from app.payment_methods import (
     get_method,
     method_name,
     ussd_code_for,
+)
+from app.subscriptions import (
+    SUB_STATUS_PENDING,
+    SUB_STATUS_PENDING_VERIFICATION,
+    SUB_STATUS_REJECTED,
+    activate_subscription,
+    auto_verify_subscription,
+    get_active_subscription,
+    is_pro,
+    log_subscription_verification,
 )
 from app.verify.service import auto_verify_tip, log_verification_attempt
 
@@ -111,12 +123,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"👋 Welcome back, **{existing_creator.display_name}**!\n"
             f"Active Payment Method: **{method_str}** (`{existing_creator.account_number}`)\n\n"
             f"🔗 **Your Personal Channel Tip Link:**\n`{deep_link}`\n\n"
-            f"📌 **Quick Actions:**\n"
-            f"• `/post` — Generate channel post & 1-tap tip button\n"
-            f"• `/mytips` — View your total earnings & supporter notes\n"
-            f"• `/export` — Download your tips as a CSV file\n"
-            f"• `/register` — Update your payment details\n"
-            f"• `/help` — Detailed command guide",
+        f"📌 **Quick Actions:**\n"
+        f"• `/post` — Generate channel post & 1-tap tip button\n"
+        f"• `/mytips` — View your total earnings & supporter notes\n"
+        f"• `/pro` — Upgrade to Tipa Pro (CSV export & more)\n"
+        f"• `/export` — Download your tips as a CSV file (Pro)\n"
+        f"• `/register` — Update your payment details\n"
+        f"• `/help` — Detailed command guide",
             parse_mode="Markdown",
         )
     else:
@@ -148,12 +161,322 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"📢 /addchannel — Link your Telegram channel for auto-tipping.\n\n"
         f"📢 /post — Generates a copy-paste post with a 1-tap `[ 🎁 Tip Creator in Birr ]` button for your channel.\n\n"
         f"📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
-        f"📄 /export — Download your verified tip history as a CSV file (reconciliation trail).\n\n"
+        f"⭐ /pro — Upgrade to Tipa Pro: CSV export, PRO badge, and early access to new features.\n\n"
+        f"📄 /export — Download your verified tip history as a CSV file (Pro feature).\n\n"
         f"💬 **Supporter Notes** — Tippers can leave an optional encouraging message/note with their tip.\n\n"
         f"⚡ **Inline Mode** — Type `@{bot_name}` while composing a post in any Telegram channel to attach a tip button instantly!\n\n"
         f"❌ /cancel — Cancel any active registration step or tipping session."
     )
     await update.effective_message.reply_text(help_text, parse_mode="Markdown")
+
+
+async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tipa Pro upsell & direct-payment upgrade flow."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    if not settings.tipa_receiving_account:
+        await update.effective_message.reply_text(
+            "⭐ **Tipa Pro** is coming soon! Payments are not configured yet — check back shortly.",
+            parse_mode="Markdown",
+        )
+        return
+
+    user_id = update.effective_user.id
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+        active_sub = None
+        if creator:
+            active_sub = await get_active_subscription(session, creator.id)
+
+    price = settings.pro_price_birr
+    duration = settings.pro_duration_days
+
+    status_line = ""
+    if active_sub and active_sub.expires_at:
+        expiry_str = active_sub.expires_at.strftime("%b %d, %Y")
+        status_line = (
+            f"✅ Your Pro is active until **{expiry_str}**.\n"
+            f"Renewing now adds **{duration} more days** on top.\n\n"
+        )
+
+    benefits = (
+        f"⭐ **Tipa Pro** — {price:g} ETB / {duration} days\n\n"
+        f"{status_line}"
+        f"🔓 **What you unlock:**\n"
+        f"• 📄 CSV export of all your verified tips\n"
+        f"• ⭐ PRO badge on your tipping page\n"
+        f"• 🚀 Early access to new Pro features as they ship\n"
+        f"• ❤️ Directly supports Tipa's development\n"
+    )
+
+    method = get_method(settings.tipa_receiving_method) or get_method("telebirr")
+    tx_ref = f"pro_{uuid.uuid4().hex[:12]}"
+    emoji = "📱" if method.kind == "mobile" else "🏦"
+    account_label = method.account_label or ("Phone" if method.kind == "mobile" else "Account Number")
+
+    instructions = (
+        f"{benefits}\n"
+        f"{emoji} **How to pay:**\n"
+        f"Send **{price:g} ETB** to {method.name} `{settings.tipa_receiving_account}` "
+        f"({account_label.lower()}), then submit your receipt reference below.\n\n"
+        f"🔖 Your payment reference code: `{tx_ref}`\n"
+        f"(You'll enter the *SMS receipt code* from {method.name} after paying.)"
+    )
+
+    if not creator:
+        instructions += "\n\n⚠️ You must `/register` first so we know where to enable Pro!"
+    else:
+        async with AsyncSessionLocal() as session:
+            session.add(
+                Subscription(
+                    creator_id=creator.id,
+                    plan="pro",
+                    amount=price,
+                    tx_ref=tx_ref,
+                    status="pending",
+                )
+            )
+            await session.commit()
+
+    await update.effective_message.reply_text(
+        instructions,
+        reply_markup=get_subscription_transfer_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Pro payment claim, cancel, and admin approval callbacks."""
+    query = update.callback_query
+    if not query or not query.data or not query.from_user:
+        return
+    await query.answer()
+
+    data = query.data
+    if data == "pro_sent":
+        context.user_data["pending_pro_ref"] = True
+        await query.edit_message_text(
+            "📝 **Pro Payment Confirmation**\n\n"
+            "Please send the transaction **Reference Number** / **SMS Code** from your payment "
+            "(e.g., `TLB12345678` or `FT12345678`):",
+            parse_mode="Markdown",
+        )
+    elif data == "pro_cancel":
+        context.user_data.pop("pending_pro_ref", None)
+        await query.edit_message_text("❌ Pro upgrade cancelled. Run `/pro` anytime!")
+    elif data.startswith(("approve_sub:", "reject_sub:")):
+        # Admin approval buttons require answering inside the handler.
+        sub_id_str = data.split(":", 1)[1]
+        await handle_admin_subscription_approval(
+            update, context, sub_id_str, is_approve=data.startswith("approve_sub:")
+        )
+
+
+async def process_subscription_claim(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    ref_code: str,
+) -> None:
+    """Verify a claimed Pro payment; auto-activate or route to admin approval."""
+    if not update.effective_user or not update.effective_message:
+        return
+    user_id = update.effective_user.id
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ Please `/register` first, then run `/pro` again.",
+                parse_mode="Markdown",
+            )
+            return
+
+        sub_stmt = (
+            select(Subscription)
+            .where(
+                Subscription.creator_id == creator.id,
+                Subscription.status.in_([SUB_STATUS_PENDING, SUB_STATUS_PENDING_VERIFICATION]),
+            )
+            .order_by(desc(Subscription.created_at))
+            .limit(1)
+        )
+        sub_res = await session.execute(sub_stmt)
+        sub = sub_res.scalar_one_or_none()
+        if not sub:
+            await update.effective_message.reply_text(
+                "❌ No pending Pro payment found. Run `/pro` to start one first.",
+                parse_mode="Markdown",
+            )
+            return
+
+        dup_stmt = (
+            select(Subscription.id)
+            .where(
+                Subscription.ref_id == ref_code,
+                Subscription.id != sub.id,
+                Subscription.status.in_([SUB_STATUS_PENDING, SUB_STATUS_PENDING_VERIFICATION, "active"]),
+            )
+            .limit(1)
+        )
+        dup_res = await session.execute(dup_stmt)
+        if dup_res.first() is not None:
+            await update.effective_message.reply_text(
+                f"❌ **Duplicate Reference Code**\n\nThe code `{ref_code}` was already used for another Pro payment.",
+                parse_mode="Markdown",
+            )
+            return
+
+        sub.ref_id = ref_code
+        sub.claimed_at = datetime.now(timezone.utc)
+        sub.status = SUB_STATUS_PENDING_VERIFICATION
+        await session.commit()
+
+        verify_result = await auto_verify_subscription(session, sub, ref_code)
+
+        if verify_result is not None and verify_result.verified:
+            await session.refresh(sub)
+            expiry_str = sub.expires_at.strftime("%b %d, %Y") if sub.expires_at else "now"
+            await update.effective_message.reply_text(
+                f"🎉 **Tipa Pro Activated!**\n\n"
+                f"Payment of **{float(sub.amount):g} ETB** verified (Ref: `{ref_code}`).\n"
+                f"Your Pro features are unlocked until **{expiry_str}**. Thank you for supporting Tipa! ❤️",
+                parse_mode="Markdown",
+            )
+            return
+
+    admins = settings.admin_ids
+    if admins:
+        try:
+            from app.bot.bot import get_telegram_application
+
+            bot_app = get_telegram_application()
+            for admin_id in admins:
+                try:
+                    await bot_app.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"⭐ **New Pro Payment Claim**\n\n"
+                            f"Creator: **{creator.display_name}** (`{creator.telegram_id}`)\n"
+                            f"Amount: **{float(sub.amount):g} ETB**\n"
+                            f"Receipt Ref: `{ref_code}`\n\n"
+                            f"Auto-verification did not confirm it. Verify manually and approve below:"
+                        ),
+                        reply_markup=get_admin_subscription_keyboard(str(sub.id)),
+                        parse_mode="Markdown",
+                    )
+                except TelegramError as e:
+                    logger.error("Failed to notify admin %s about Pro claim: %s", admin_id, e)
+        except Exception:
+            logger.exception("Failed to notify admins about Pro claim")
+
+    await update.effective_message.reply_text(
+        f"✅ **Pro Payment Submitted!**\n\n"
+        f"Ref/SMS Code: `{ref_code}`\n\n"
+        f"We couldn't auto-verify it yet — our team will review it shortly. "
+        f"You'll get a message as soon as Pro is activated! 🙏",
+        parse_mode="Markdown",
+    )
+
+
+async def handle_admin_subscription_approval(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    sub_id_str: str,
+    is_approve: bool,
+) -> None:
+    """Admin-only manual Approve/Reject for a claimed Pro payment."""
+    query = update.callback_query
+    if not query:
+        return
+
+    admin_id = query.from_user.id
+    if admin_id not in settings.admin_ids:
+        await query.answer("⛔ Only Tipa admins can do this.", show_alert=True)
+        return
+    await query.answer()
+
+    try:
+        sub_uuid = uuid.UUID(sub_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid subscription ID.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        sub = await session.get(Subscription, sub_uuid)
+        if not sub:
+            await query.edit_message_text("❌ Subscription not found.")
+            return
+
+        if sub.status not in (SUB_STATUS_PENDING, SUB_STATUS_PENDING_VERIFICATION):
+            await query.answer(f"This payment was already processed ({sub.status}).", show_alert=True)
+            return
+
+        c_stmt = select(Creator).where(Creator.id == sub.creator_id)
+        c_res = await session.execute(c_stmt)
+        creator = c_res.scalar_one_or_none()
+
+        if is_approve:
+            await activate_subscription(session, sub, method="admin_approval")
+            await log_subscription_verification(
+                session,
+                subscription_id=sub.id,
+                provider="admin_approval",
+                status="success",
+                verified=True,
+                amount=float(sub.amount),
+                message="Approved manually by a Tipa admin",
+            )
+            expiry_str = sub.expires_at.strftime("%b %d, %Y") if sub.expires_at else "now"
+            await query.edit_message_text(
+                f"🎉 **Pro Approved**\n\n{creator.display_name if creator else 'Creator'} is Pro until **{expiry_str}**."
+            )
+            if creator:
+                try:
+                    await context.bot.send_message(
+                        chat_id=creator.telegram_id,
+                        text=(
+                            f"🎉 **Tipa Pro Activated!**\n\n"
+                            f"Your payment was confirmed. Pro features are unlocked until **{expiry_str}**. "
+                            f"Thank you for supporting Tipa! ❤️"
+                        ),
+                        parse_mode="Markdown",
+                    )
+                except TelegramError as e:
+                    logger.error("Failed to notify creator about Pro activation: %s", e)
+        else:
+            sub.status = SUB_STATUS_REJECTED
+            await session.commit()
+            await log_subscription_verification(
+                session,
+                subscription_id=sub.id,
+                provider="admin_approval",
+                status="rejected",
+                verified=False,
+                amount=float(sub.amount),
+                message="Rejected by a Tipa admin",
+            )
+            await query.edit_message_text(
+                f"❌ **Pro Payment Rejected**\n\nClaim for `{sub.ref_id}` marked as rejected."
+            )
+            if creator:
+                try:
+                    await context.bot.send_message(
+                        chat_id=creator.telegram_id,
+                        text=(
+                            f"❌ **Pro Payment Not Confirmed**\n\n"
+                            f"Your Pro payment (Ref: `{sub.ref_id}`) could not be verified. "
+                            f"If you believe this is a mistake, contact support with your receipt."
+                        ),
+                        parse_mode="Markdown",
+                    )
+                except TelegramError as e:
+                    logger.error("Failed to notify creator about Pro rejection: %s", e)
 
 
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -569,6 +892,21 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     text = update.effective_message.text.strip()
+
+    # Case 0: Pending Tipa Pro payment reference code
+    if context.user_data.pop("pending_pro_ref", None):
+        clean_ref = text.strip()
+        if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
+            context.user_data["pending_pro_ref"] = True
+            await update.effective_message.reply_text(
+                "⚠️ **Invalid Reference / SMS Code Format**\n\n"
+                "Please enter a valid transaction reference code (e.g. Telebirr `TLB12345678` or CBE `FT12345678`) "
+                "with at least 6 characters, no spaces or special symbols:",
+                parse_mode="Markdown",
+            )
+            return
+        await process_subscription_claim(update, context, ref_code=clean_ref)
+        return
 
     # Case A: Pending transaction reference verification code
     if "pending_verify_tip_id" in context.user_data:
@@ -1042,13 +1380,20 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         rec_res = await session.execute(rec_stmt)
         recent_tips = rec_res.scalars().all()
 
+        active_sub = await get_active_subscription(session, creator.id)
+
     deep_link = f"https://t.me/{context.bot.username}?start=tip_{creator.id}"
     method_str = method_name(creator.payment_method)
+    if active_sub and active_sub.expires_at:
+        pro_line = f"⭐ **Pro:** active until *{active_sub.expires_at.strftime('%b %d, %Y')}*\n\n"
+    else:
+        pro_line = "⭐ **Pro:** not active — run `/pro` to upgrade!\n\n"
     text = (
         f"📊 **Creator Dashboard — {creator.display_name}**\n"
         f"Payment Method: **{method_str}** (`{creator.account_number}`)\n\n"
         f"💰 **Total Tips Earned:** `{float(total_amount):,.2f} ETB`\n"
-        f"🎉 **Total Tips Received:** `{total_count}`\n\n"
+        f"🎉 **Total Tips Received:** `{total_count}`\n"
+        f"{pro_line}"
         f"🔗 **Your Tip Link:**\n`{deep_link}`\n\n"
     )
 
@@ -1080,6 +1425,15 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not creator:
             await update.effective_message.reply_text(
                 "❌ You are not registered as a creator yet.\nRun `/register` to link your bank or Telebirr account!",
+                parse_mode="Markdown",
+            )
+            return
+
+        if not await is_pro(session, creator.id):
+            await update.effective_message.reply_text(
+                "⭐ **CSV export is a Tipa Pro feature!**\n\n"
+                "Unlock it (plus more Pro perks) by upgrading with `/pro` — "
+                f"just **{settings.pro_price_birr:g} ETB / {settings.pro_duration_days} days**.",
                 parse_mode="Markdown",
             )
             return

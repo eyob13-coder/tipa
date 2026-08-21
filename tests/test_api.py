@@ -192,11 +192,41 @@ async def test_miniapp_api_rejects_tampered_init_data(db_session):
 
 
 @pytest.mark.asyncio
+async def test_miniapp_creator_csv_export_requires_pro(db_session):
+    if not settings.bot_token:
+        pytest.skip("BOT_TOKEN unset: initData validation is disabled")
+
+    creator = Creator(
+        telegram_id=778,
+        telegram_username="creator_export_free",
+        display_name="Creator Export Free",
+        bank_code=861,
+        payment_method="telebirr",
+        account_number="0911888111",
+        account_name="Creator Export Free",
+    )
+    db_session.add(creator)
+    await db_session.commit()
+    await db_session.refresh(creator)
+
+    headers = {"X-Telegram-Init-Data": make_init_data(settings.bot_token, user_id=778)}
+    with patch("app.api.routes.AsyncSessionLocal") as mock_session_local:
+        session_cm = AsyncMockSession(db_session)
+        mock_session_local.return_value = session_cm
+
+        response = client.get(f"/api/creator/{creator.id}/export", headers=headers)
+        assert response.status_code == 402
+        assert "Pro" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_miniapp_creator_csv_export(db_session):
     if not settings.bot_token:
         pytest.skip("BOT_TOKEN unset: initData validation is disabled")
 
-    from app.db.models import Tip
+
+    from app.db.models import Subscription, Tip
+    from app.subscriptions import activate_subscription
 
     creator = Creator(
         telegram_id=777,
@@ -223,6 +253,18 @@ async def test_miniapp_creator_csv_export(db_session):
     )
     db_session.add(tip)
     await db_session.commit()
+
+    sub = Subscription(
+        creator_id=creator.id,
+        plan="pro",
+        status="pending",
+        amount=settings.pro_price_birr,
+        tx_ref="pro_export_test",
+    )
+    db_session.add(sub)
+    await db_session.commit()
+    await db_session.refresh(sub)
+    await activate_subscription(db_session, sub, method="admin_approval")
 
     headers = {"X-Telegram-Init-Data": make_init_data(settings.bot_token, user_id=777)}
     with patch("app.api.routes.AsyncSessionLocal") as mock_session_local:

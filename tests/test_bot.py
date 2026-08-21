@@ -13,8 +13,7 @@ from app.bot.keyboards import (
     get_transfer_keyboard,
 )
 from app.db.base import Base
-from app.db.models import Creator, Tip
-from app.export import build_tips_csv
+from app.db.models import Creator
 from app.payment_methods import PAYMENT_METHODS
 
 
