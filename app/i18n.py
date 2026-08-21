@@ -102,7 +102,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "📊 /mytips — Creator dashboard. Shows your total Birr earned, tip count, and recent tips with supporter messages.\n\n"
             "🔐 /verifyaccount — Prove you own your receiving account with a small coded deposit.\n\n"
             "⭐ /pro — Upgrade to Tipa Pro: CSV export, PRO badge, and early access to new features.\n\n"
-            "📄 /export — Download your verified tip history as a CSV file (Pro feature).\n\n"
+            "📄 /export — Download your verified tip history as a CSV or PDF file (Pro feature; try `/export pdf`).\n\n"
+            "💳 /payout — Switch the bank or mobile wallet your tips are paid into.\n\n"
             "💬 **Supporter Notes** — Tippers can leave an optional encouraging message/note with their tip.\n\n"
             "⚡ **Inline Mode** — Type `@{bot_name}` while composing a post in any Telegram channel to attach a tip button instantly!\n\n"
             "❌ /cancel — Cancel any active registration step or tipping session."
@@ -128,6 +129,11 @@ STRINGS: dict[str, dict[str, str]] = {
             "Send **{price} ETB** to {method_name} `{tipa_account}` ({account_label}), then submit your receipt reference below.\n\n"
             "🔖 Your payment reference code: `{tx_ref}`\n"
             "(You'll enter the *SMS receipt code* from {method_name} after paying.)"
+        ),
+        "payout_intro": (
+            "💳 **Update Payout Details**\n\n"
+            "Current payout method: **{current}**\n"
+            "Pick a new bank or mobile wallet below — your tipping link stays the same."
         ),
     },
     "am": {
@@ -223,7 +229,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "📊 /mytips — የፈጣሪ ዳሽቦርድ። ጠቅላላ ብር ገቢዎን፣ የስጦታ ብዛትዎን እና የደጋፊ መልእክቶችን ያሳያል።\n\n"
             "🔐 /verifyaccount — በትንሽ ኮድ ያለው ተቀንጭቦ የክፍያ ሂሳብዎ የእርስዎ መሆኑን ያረጋግጡ።\n\n"
             "⭐ /pro — ወደ Tipa Pro ያሳዩ፦ CSV ማውጣት፣ PRO ምልክት እና አዳዲስ ባህሪያት ቀደምት መዳረሻ።\n\n"
-            "📄 /export — የተረጋገጡ ስጦታዎችዎን ታሪክ እንደ CSV ፋይል ያውርዱ (የPro ባህሪ)።\n\n"
+            "📄 /export — የተረጋገጡ ስጦታዎችዎን ታሪክ እንደ CSV ወይም PDF ፋይል ያውርዱ (የPro ባህሪ; `/export pdf` ይሞክሩ)።\n\n"
+            "💳 /payout — ስጦታዎችዎ የሚከፈሉበትን ባንክ ወይም ሞባይል ዋሌት ይለውጡ።\n\n"
             "💬 **የደጋፊ መልእክቶች** — ስጦታ ከሚልኩ ጋር አማራጭ የማበረታቻ መልእክት ማካተት ይችላሉ።\n\n"
             "⚡ **Inline ሁኔታ** — በማንኛውም ቻናል ፖስት ላይ ሲጽፉ `@{bot_name}` ይጻፉ እና የስጦታ አዝራር በፍጥነት ያያይዙ!\n\n"
             "❌ /cancel — ማንኛውንም ንቁ ምዝገባ ወይም የመለገፍ ክፍለ-ጊዜ ይሰርዙ።"
@@ -248,6 +255,11 @@ STRINGS: dict[str, dict[str, str]] = {
             "**{price} ETB** ወደ {method_name} `{tipa_account}` ({account_label}) ይላኩ፣ ከዚያ የደረሰኝ ማጣቀሻዎን ከታች ያስገቡ።\n\n"
             "🔖 የክፍያ ማጣቀሻ ኮድዎ፦ `{tx_ref}`\n"
             "(ከከፈሉ በኋላ ከ{method_name} የሚላከውን *SMS ማረጋገጫ ኮድ* ያስገባሉ።)"
+        ),
+        "payout_intro": (
+            "💳 **የክፍያ ዝርዝሮችን ማዘመን**\n\n"
+            "የአሁኑ የክፍያ መንገድ: **{current}**\n"
+            "ከታች አዲስ ባንክ ወይም ሞባይል ዋሌት ይምረጡ — የስጦታ ሊንክዎ ሳይቀየር ይቀራል።"
         ),
     },
 }

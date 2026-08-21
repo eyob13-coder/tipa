@@ -46,6 +46,7 @@ from app.payment_methods import (
     method_name,
     ussd_code_for,
 )
+from app.receipts import build_tips_pdf
 from app.subscriptions import (
     SUB_STATUS_PENDING,
     SUB_STATUS_PENDING_VERIFICATION,
@@ -986,11 +987,46 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.effective_message:
         return ConversationHandler.END
 
+    context.user_data.pop("payout_update", None)
     keyboard = get_payment_method_selection_keyboard()
     await update.effective_message.reply_text(
         "💳 **Step 1/3: Choose your Receiving Payment Method**\n"
         "How would you like to receive tips from followers?",
         reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return METHOD_CHOICE
+
+
+async def payout_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Change an existing creator's payout bank/wallet via the registration flow.
+
+    Any of the nine supported banks / mobile wallets can be switched to here;
+    switching resets account ownership proof until /verifyaccount is redone.
+    """
+    if not update.effective_message:
+        return ConversationHandler.END
+
+    user_id = update.effective_user.id if update.effective_user else None
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+    if not creator:
+        await update.effective_message.reply_text(
+            "❌ You are not registered as a creator yet.\nRun `/register` first to set up payouts!",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    lang = _lang(context)
+    context.user_data["payout_update"] = True
+    current = method_name(creator.payment_method)
+    await update.effective_message.reply_text(
+        t(lang, "payout_intro", current=current) + "\n\n"
+        "💳 **Step 1/2: Choose your new Payout Method**",
+        reply_markup=get_payment_method_selection_keyboard(),
         parse_mode="Markdown",
     )
     return METHOD_CHOICE
@@ -1067,6 +1103,10 @@ async def account_name_received(update: Update, context: ContextTypes.DEFAULT_TY
 
     account_name = update.effective_message.text.strip()
     context.user_data["account_name"] = account_name
+
+    # Payout updates don't touch the channel link — go straight to confirmation.
+    if context.user_data.get("payout_update"):
+        return await show_registration_confirmation(update, context)
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⏩ Skip Channel Link For Now", callback_data="skip_channel_link")]
@@ -1151,6 +1191,7 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
 
     data = query.data or ""
     if data == "reg_cancel":
+        context.user_data.pop("payout_update", None)
         await query.edit_message_text("❌ Registration cancelled. Run `/register` whenever you're ready!")
         return ConversationHandler.END
 
@@ -1193,6 +1234,11 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
                 creator.telegram_username = user.username
                 if channel_id:
                     creator.channel_id = channel_id
+                if context.user_data.get("payout_update"):
+                    # New account, unproven: drop ownership proof until /verifyaccount.
+                    creator.account_verified = False
+                    creator.account_verification_code = None
+                    creator.account_verification_ref = None
             else:
                 creator = Creator(
                     telegram_id=user.id,
@@ -1211,6 +1257,17 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
 
         bot_name = context.bot.username or settings.bot_username
         deep_link = f"https://t.me/{bot_name}?start=tip_{creator.id}"
+
+        if context.user_data.pop("payout_update", None):
+            await query.edit_message_text(
+                f"✅ **Payout Details Updated!**\n\n"
+                f"New Payout Method: **{method_code.upper()}** (`{account_num}`)\n\n"
+                f"🔐 **Action required:** run `/verifyaccount` to prove the new account is yours — "
+                f"tips stay protected while ownership is unproven.\n\n"
+                f"🔗 Your tipping link is unchanged:\n`{deep_link}`",
+                parse_mode="Markdown",
+            )
+            return ConversationHandler.END
 
         await query.edit_message_text(
             f"🎉 **Registration Successful!**\n\n"
@@ -2012,11 +2069,12 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Export the creator's verified tips as a CSV document."""
+    """Export the creator's verified tips as CSV or PDF (via `/export pdf`)."""
     if not update.effective_message or not update.effective_user:
         return
 
     user_id = update.effective_user.id
+    want_pdf = bool(context.args) and context.args[0].lower() in ("pdf", "receipt")
 
     async with AsyncSessionLocal() as session:
         stmt = select(Creator).where(Creator.telegram_id == user_id)
@@ -2032,7 +2090,7 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if not await is_pro(session, creator.id):
             await update.effective_message.reply_text(
-                "⭐ **CSV export is a Tipa Pro feature!**\n\n"
+                "⭐ **Export is a Tipa Pro feature!**\n\n"
                 "Unlock it (plus more Pro perks) by upgrading with `/pro` — "
                 f"just **{settings.pro_price_birr:g} ETB / {settings.pro_duration_days} days**.",
                 parse_mode="Markdown",
@@ -2055,9 +2113,14 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    filename = f"tipa_{creator.telegram_id}_tips.csv"
+    if want_pdf:
+        filename = f"tipa_{creator.telegram_id}_tips.pdf"
+        document = io.BytesIO(build_tips_pdf(tips, creator))
+    else:
+        filename = f"tipa_{creator.telegram_id}_tips.csv"
+        document = io.BytesIO(build_tips_csv(tips).encode("utf-8"))
     await update.effective_message.reply_document(
-        document=io.BytesIO(build_tips_csv(tips).encode("utf-8")),
+        document=document,
         filename=filename,
         caption=f"📄 **{len(tips)} tips exported** ({filename})",
         parse_mode="Markdown",

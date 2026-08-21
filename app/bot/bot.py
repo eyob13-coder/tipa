@@ -36,6 +36,7 @@ from app.bot.handlers import (
     inline_query_handler,
     mytips_command,
     payment_method_callback,
+    payout_start,
     pro_command,
     receipt_photo_handler,
     register_start,
@@ -63,7 +64,8 @@ async def post_init_setup(application: Application) -> None:
         BotCommand("mytips", "View total earnings & tips history"),
         BotCommand("verifyaccount", "Prove your payout account is yours"),
         BotCommand("pro", "Upgrade to Tipa Pro (CSV export & more)"),
-        BotCommand("export", "Download your tips as CSV"),
+        BotCommand("export", "Download your tips as CSV or PDF"),
+        BotCommand("payout", "Switch your payout bank or wallet"),
         BotCommand("help", "Command guide & instructions"),
         BotCommand("cancel", "Cancel current registration or action"),
     ]
@@ -87,9 +89,12 @@ def build_telegram_application() -> Application:
         .build()
     )
 
-    # /register ConversationHandler (Telebirr / CBE)
+    # /register + /payout ConversationHandler (any of the 9 banks / mobile wallets)
     registration_conv = ConversationHandler(
-        entry_points=[CommandHandler("register", register_start)],
+        entry_points=[
+            CommandHandler("register", register_start),
+            CommandHandler("payout", payout_start),
+        ],
         states={
             METHOD_CHOICE: [
                 CallbackQueryHandler(payment_method_callback, pattern=r"^(method_select:|back_to_methods$)"),

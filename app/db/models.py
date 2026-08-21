@@ -66,7 +66,7 @@ class Creator(Base):
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     bank_code: Mapped[int] = mapped_column(Integer, nullable=False, default=861)
-    payment_method: Mapped[str] = mapped_column(String, nullable=False, default="cbe")  # 'cbe' | 'telebirr'
+    payment_method: Mapped[str] = mapped_column(String, nullable=False, default="cbe")  # see app.payment_methods
     account_number: Mapped[str] = mapped_column(String, nullable=False)
     account_name: Mapped[str] = mapped_column(String, nullable=False)
     channel_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

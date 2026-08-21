@@ -28,6 +28,7 @@ from app.payment_methods import (
     method_name,
     ussd_code_for,
 )
+from app.receipts import build_tips_pdf
 from app.subscriptions import is_pro
 from app.verify.service import auto_verify_tip
 
@@ -224,6 +225,47 @@ async def get_creator_profile(identifier: str, _init_data: str = Depends(require
         }
 
 
+async def _creator_for_export(session, identifier: str, init_data: str) -> Creator:
+    """Resolve the creator named in the path and enforce self-export + Pro gates."""
+    creator = None
+    try:
+        creator_uuid = uuid.UUID(identifier)
+        stmt = select(Creator).where(Creator.id == creator_uuid)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+    except ValueError:
+        pass
+
+    if not creator and identifier.isdigit():
+        stmt = select(Creator).where(Creator.telegram_id == int(identifier))
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+    if not creator:
+        raise HTTPException(status_code=404, detail="Creator not found")
+
+    telegram_user_id = parse_init_data_user(init_data)
+    if telegram_user_id is None or telegram_user_id != creator.telegram_id:
+        raise HTTPException(status_code=403, detail="You can only export your own tips")
+
+    if not await is_pro(session, creator.id):
+        raise HTTPException(
+            status_code=402,
+            detail="Export is a Tipa Pro feature. Upgrade with /pro in the bot.",
+        )
+    return creator
+
+
+async def _verified_tips_for(session, creator: Creator) -> list[Tip]:
+    stmt = (
+        select(Tip)
+        .where(Tip.creator_id == creator.id, Tip.status == "success")
+        .order_by(desc(Tip.verified_at), desc(Tip.created_at))
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
 @router.get("/creator/{identifier}/export")
 async def export_creator_tips_csv(
     identifier: str,
@@ -231,46 +273,33 @@ async def export_creator_tips_csv(
 ):
     """Export a creator's verified tip history as CSV (reconciliation trail)."""
     async with AsyncSessionLocal() as session:
-        creator = None
-        try:
-            creator_uuid = uuid.UUID(identifier)
-            stmt = select(Creator).where(Creator.id == creator_uuid)
-            res = await session.execute(stmt)
-            creator = res.scalar_one_or_none()
-        except ValueError:
-            pass
-
-        if not creator and identifier.isdigit():
-            stmt = select(Creator).where(Creator.telegram_id == int(identifier))
-            res = await session.execute(stmt)
-            creator = res.scalar_one_or_none()
-
-        if not creator:
-            raise HTTPException(status_code=404, detail="Creator not found")
-
-        telegram_user_id = parse_init_data_user(init_data)
-        if telegram_user_id is None or telegram_user_id != creator.telegram_id:
-            raise HTTPException(status_code=403, detail="You can only export your own tips")
-
-        if not await is_pro(session, creator.id):
-            raise HTTPException(
-                status_code=402,
-                detail="CSV export is a Tipa Pro feature. Upgrade with /pro in the bot.",
-            )
-
-        stmt = (
-            select(Tip)
-            .where(Tip.creator_id == creator.id, Tip.status == "success")
-            .order_by(desc(Tip.verified_at), desc(Tip.created_at))
-        )
-        res = await session.execute(stmt)
-        tips = res.scalars().all()
+        creator = await _creator_for_export(session, identifier, init_data)
+        tips = await _verified_tips_for(session, creator)
 
     csv_text = build_tips_csv(tips)
     filename = f"tipa_{creator.telegram_id}_tips.csv"
     return StreamingResponse(
         io.StringIO(csv_text),
         media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/creator/{identifier}/export.pdf")
+async def export_creator_tips_pdf(
+    identifier: str,
+    init_data: str = Depends(require_valid_init_data),
+):
+    """Export a creator's verified tip history as a formatted PDF receipt."""
+    async with AsyncSessionLocal() as session:
+        creator = await _creator_for_export(session, identifier, init_data)
+        tips = await _verified_tips_for(session, creator)
+
+    pdf_bytes = build_tips_pdf(tips, creator)
+    filename = f"tipa_{creator.telegram_id}_tips.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
