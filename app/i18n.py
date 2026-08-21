@@ -135,6 +135,31 @@ STRINGS: dict[str, dict[str, str]] = {
             "Current payout method: **{current}**\n"
             "Pick a new bank or mobile wallet below — your tipping link stays the same."
         ),
+        "goal_set": (
+            "🎯 **Goal set!**\n\n{line}\n\n"
+            "📢 Run `/post` to attach the progress bar to a channel post — "
+            "it updates automatically every time a tip lands.\n"
+            "Change it anytime: `/goal <target> <title>` or remove with `/endgoal`."
+        ),
+        "goal_usage": (
+            "🎯 **Set a fundraising goal**\n\n"
+            "Usage: `/goal 10000 New camera`\n\n"
+            "Followers will see a live progress bar as tips come in."
+        ),
+        "goal_cancelled": "🗑️ Goal removed. Set a new one with `/goal <target> <title>`.",
+        "goal_none": "ℹ️ You have no active goal. Create one with `/goal <target> <title>`.",
+        "topfans_header": "🏆 **Top Fans This Month**\n\n",
+        "topfans_empty": (
+            "🤔 No verified tips yet this month.\n"
+            "Share your tip link — your biggest supporters will show up here!"
+        ),
+        "digest_top_fan": "**Top fan this week:**",
+        "digest_text": (
+            "📊 **Your Week on Tipa**\n\n"
+            "💰 Earned: **{earned} ETB** from **{count}** tip(s)\n"
+            "{top_line}{goal_line}"
+            "Keep sharing your tip link — every tip lands straight in your {method} account."
+        ),
     },
     "am": {
         "lang_prompt": "\n\n🌐 **ቋንቋዎን ይምረጡ / Choose your language:**",
@@ -260,6 +285,31 @@ STRINGS: dict[str, dict[str, str]] = {
             "💳 **የክፍያ ዝርዝሮችን ማዘመን**\n\n"
             "የአሁኑ የክፍያ መንገድ: **{current}**\n"
             "ከታች አዲስ ባንክ ወይም ሞባይል ዋሌት ይምረጡ — የስጦታ ሊንክዎ ሳይቀየር ይቀራል።"
+        ),
+        "goal_set": (
+            "🎯 **ግብ ተመዘገበ!**\n\n{line}\n\n"
+            "📢 የሂደት አሞሌውን ወደ ቻናል ፖስት ለማያያዝ `/post` ይጫኑ — "
+            "ስጦታ በሚደርስበት ጊዜ በራስ-ሰር ይቀየራል።\n"
+            "በፈለጉ ጊዜ ይለውጡ፦ `/goal <target> <title>` ወይም `/endgoal` ይሰርዙ።"
+        ),
+        "goal_usage": (
+            "🎯 **የገቢ ማሰባሰቢያ ግብ ይመዝገቡ**\n\n"
+            "አጠቃቀም፦ `/goal 10000 New camera`\n\n"
+            "ተከታዮችዎ ስጦታ ሲገባ በቀጥታ የሚቀየር የሂደት አሞሌ ያያሉ።"
+        ),
+        "goal_cancelled": "🗑️ ግቡ ተሰርዟል። አዲስ ለመመዝገብ `/goal <target> <title>` ይጫኑ።",
+        "goal_none": "ℹ️ ንቁ ግብ የለዎትም። ለመመዝገብ `/goal <target> <title>` ይጫኑ።",
+        "topfans_header": "🏆 **የዚህ ወር ከፍተኛ ደጋፊዎች**\n\n",
+        "topfans_empty": (
+            "🤔 በዚህ ወር እስካሁን የተረጋገጠ ስጦታ የለም።\n"
+            "የስጦታ ሊንክዎን ያጋሩ — ትልልቅ ደጋፊዎችዎ እዚህ ይታያሉ!"
+        ),
+        "digest_top_fan": "**የዚህ ሳምንት ኮከብ ደጋፊ:**",
+        "digest_text": (
+            "📊 **በTipa ላይ የሚቀጥለው ሳምንትዎ**\n\n"
+            "💰 ገቢ፦ **{earned} ETB** ከ**{count}** ስጦታ(ዎች)\n"
+            "{top_line}{goal_line}"
+            "የስጦታ ሊንክዎን መጋራትዎን ይቀጥሉ — እያንዳንዱ ስጦታ በቀጥታ ወደ {method} ሂሳብዎ ይገባል።"
         ),
     },
 }

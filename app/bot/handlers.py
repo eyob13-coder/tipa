@@ -1866,6 +1866,14 @@ async def handle_creator_approval(
                 message="Approved manually by the creator",
             )
 
+            # Refresh any bound tip-goal post / celebrate a reached goal.
+            try:
+                from app.goals import on_tip_verified
+
+                await on_tip_verified(tip.id, bot=context.bot)
+            except Exception:
+                logger.exception("Goal refresh failed after approving tip %s", tip.id)
+
             note_str = f" (*\"{tip.note}\"*)" if tip.note else ""
             await query.edit_message_text(
                 f"🎉 **Tip Approved & Verified!**\n\n"
@@ -1928,6 +1936,15 @@ async def channel_post_generator(update: Update, context: ContextTypes.DEFAULT_T
     bot_name = context.bot.username or settings.bot_username
     keyboard = get_channel_post_button(bot_name, str(creator.id))
 
+    from app.goals import get_active_goal, goal_progress_line, goal_raised_amount
+
+    goal_line = ""
+    async with AsyncSessionLocal() as session:
+        active_goal = await get_active_goal(session, creator.id)
+        if active_goal:
+            current = await goal_raised_amount(session, active_goal)
+            goal_line = "\n\n" + goal_progress_line(active_goal, current)
+
     await update.effective_message.reply_text(
         "📢 **Channel Post & Tip Button Generator**\n\n"
         "Forward or copy the message below to your channel so followers can tip you with one tap!\n\n"
@@ -1936,7 +1953,8 @@ async def channel_post_generator(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     await update.effective_message.reply_text(
-        "✨ **Enjoying the content?** Support this channel directly in Birr (ETB) via Tipa!",
+        "✨ **Enjoying the content?** Support this channel directly in Birr (ETB) via Tipa!"
+        f"{goal_line}",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -2028,6 +2046,14 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         active_sub = await get_active_subscription(session, creator.id)
 
+        from app.goals import get_active_goal, goal_progress_line, goal_raised_amount
+
+        goal = await get_active_goal(session, creator.id)
+        goal_dash_line = ""
+        if goal:
+            current = await goal_raised_amount(session, goal)
+            goal_dash_line = "\n" + goal_progress_line(goal, current).replace("*", "") + "\n"
+
     deep_link = f"https://t.me/{context.bot.username}?start=tip_{creator.id}"
     method_str = method_name(creator.payment_method)
     lang = creator.language or _lang(context)
@@ -2049,6 +2075,7 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             av_line=av_line,
             deep_link=deep_link,
         )
+        + goal_dash_line
     )
 
     if recent_tips:
@@ -2066,6 +2093,124 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text += t(lang, "no_tips_yet")
 
     await update.effective_message.reply_text(text, parse_mode="Markdown")
+
+
+async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set or replace the creator's public fundraising goal (live progress bar)."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    args = (context.args or []) if context.args else []
+    if len(args) < 2:
+        lang = _lang(context)
+        await update.effective_message.reply_text(
+            t(lang, "goal_usage"),
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        target = Decimal(args[0])
+        if target <= 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        await update.effective_message.reply_text("⚠️ Target must be a positive number, e.g. `/goal 10000 New camera`.", parse_mode="Markdown")
+        return
+
+    title = " ".join(args[1:]).strip()[:120]
+
+    user_id = update.effective_user.id
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        creator = (await session.execute(stmt)).scalar_one_or_none()
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ You are not registered as a creator yet.\nRun `/register` first!",
+                parse_mode="Markdown",
+            )
+            return
+
+        from app.goals import create_goal, goal_progress_line, goal_raised_amount
+
+        goal = await create_goal(session, creator.id, title, target)
+        current = await goal_raised_amount(session, goal)
+        line = goal_progress_line(goal, current)
+
+    lang = creator.language or _lang(context)
+    await update.effective_message.reply_text(
+        t(lang, "goal_set", line=line),
+        parse_mode="Markdown",
+    )
+
+
+async def endgoal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove the creator's active goal."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    lang = _lang(context)
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        creator = (await session.execute(stmt)).scalar_one_or_none()
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ You are not registered as a creator yet.\nRun `/register` first!",
+                parse_mode="Markdown",
+            )
+            return
+
+        from app.goals import cancel_goal
+
+        removed = await cancel_goal(session, creator.id)
+
+    await update.effective_message.reply_text(
+        t(creator.language or lang, "goal_cancelled" if removed else "goal_none"),
+        parse_mode="Markdown",
+    )
+
+
+async def topfans_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Monthly top-tipper leaderboard with all-time tier badges."""
+
+    from app.fans import fan_tier, top_tippers
+
+    if not update.effective_message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        creator = (await session.execute(stmt)).scalar_one_or_none()
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ You are not registered as a creator yet.\nRun `/register` first!",
+                parse_mode="Markdown",
+            )
+            return
+
+        rows = await top_tippers(session, creator.id, since=month_start, limit=10)
+
+    lang = creator.language or _lang(context)
+    if not rows:
+        await update.effective_message.reply_text(t(lang, "topfans_empty"), parse_mode="Markdown")
+        return
+
+    # One windowless pass for every supporter's all-time total (drives tier badges).
+    async with AsyncSessionLocal() as session:
+        all_rows = await top_tippers(session, creator.id, limit=100)
+    totals = {r["telegram_id"]: r["total"] for r in all_rows}
+
+    lines = [t(lang, "topfans_header")]
+    for i, row in enumerate(rows, start=1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+        badge = fan_tier(totals.get(row["telegram_id"], 0))
+        lines.append(f"{medal} **{row['name']}** — {float(row['total']):,.0f} ETB ({badge})")
+
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2242,3 +2387,50 @@ async def auto_channel_post_handler(update: Update, context: ContextTypes.DEFAUL
         logger.info(f"Auto-attached tip button for creator {creator.display_name} on channel post {post_id}")
     except TelegramError as e:
         logger.error(f"Could not auto-attach tip button to channel post: {e}")
+
+    # Attach the active goal's live progress bar to this post, if any.
+    from app.goals import (
+        bind_goal_to_post,
+        get_active_goal,
+        goal_progress_line,
+        goal_raised_amount,
+    )
+
+    async with AsyncSessionLocal() as session:
+        goal = await get_active_goal(session, creator.id)
+        if not goal or goal.status != "active":
+            return
+        base_text = (channel_post.text or channel_post.caption or "").strip()
+        if not base_text:
+            return  # sticker/photo-only posts without caption can't carry the bar
+        full_text = f"{base_text}\n\n{goal_progress_line(goal, await goal_raised_amount(session, goal))}"
+        bound_caption = False
+        try:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=channel_post.chat.id,
+                    message_id=channel_post.message_id,
+                    text=full_text,
+                    parse_mode="Markdown",
+                )
+            except TelegramError as te:
+                if "caption" not in str(te).lower() and "text" not in str(te).lower():
+                    raise
+                await context.bot.edit_message_caption(
+                    chat_id=channel_post.chat.id,
+                    message_id=channel_post.message_id,
+                    caption=full_text,
+                    parse_mode="Markdown",
+                )
+                bound_caption = True
+        except TelegramError as e:
+            logger.warning("Could not attach goal bar to post %s: %s", post_id, e)
+            return
+        await bind_goal_to_post(
+            session,
+            goal,
+            str(channel_post.chat.id),
+            post_id,
+            base_text,
+            bound_caption,
+        )

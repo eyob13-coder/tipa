@@ -79,6 +79,10 @@ class Creator(Base):
     is_frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # UI language ('en' | 'am').
     language: Mapped[str] = mapped_column(String(2), nullable=False, default="en")
+    # Last time the creator received their weekly digest DM (dedup across workers).
+    last_weekly_digest_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -87,6 +91,43 @@ class Creator(Base):
     subscriptions: Mapped[list["Subscription"]] = relationship(
         "Subscription", back_populates="creator", lazy="selectin", cascade="all, delete-orphan"
     )
+    goals: Mapped[list["TipGoal"]] = relationship(
+        "TipGoal", back_populates="creator", lazy="selectin", cascade="all, delete-orphan"
+    )
+
+
+class TipGoal(Base):
+    """A creator's public fundraising goal ("🎯 5,000/10,000 ETB for new camera").
+
+    One active goal per creator. Progress is never stored — it is recomputed as
+    the sum of verified tips since the goal was created, so disputes/refunds
+    self-correct. When attached to a channel post (bound_channel_id /
+    bound_message_id), the post's progress bar is edited live after each
+    verified tip using bound_text (post body without the goal line).
+    """
+
+    __tablename__ = "tip_goals"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    target_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="active", index=True
+    )  # 'active' | 'reached' | 'cancelled'
+    # Live-update binding to the channel post showing this goal.
+    bound_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_message_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_is_caption: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    reached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    creator: Mapped["Creator"] = relationship("Creator", back_populates="goals")
 
 
 class Tip(Base):

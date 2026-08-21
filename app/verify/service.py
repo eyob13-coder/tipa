@@ -100,6 +100,12 @@ async def auto_verify_tip(
             ref_code,
             result.amount,
         )
+        # Fire-and-forget: refresh any bound tip-goal post / celebrate.
+        import asyncio
+
+        from app.goals import on_tip_verified
+
+        asyncio.create_task(on_tip_verified(str(tip.id)))
     else:
         logger.info(
             "Verification did not confirm tip %s: provider=%s status=%s verified=%s amount=%s",

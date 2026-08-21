@@ -12,6 +12,7 @@ from telegram import Update as TelegramUpdate
 
 from app.api.routes import router as api_router
 from app.bot.bot import get_telegram_application
+from app.bot.digest import run_weekly_digest_loop
 from app.bot.reminders import run_tip_reminder_loop
 from app.config import settings
 from app.db.session import AsyncSessionLocal, init_db
@@ -23,12 +24,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 bot_task: asyncio.Task = None
+digest_task: asyncio.Task = None
 BASE_DIR = Path(__file__).resolve().parent
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bot_task
+    global bot_task, digest_task
 
     if settings.sentry_dsn:
         try:
@@ -89,6 +91,8 @@ async def lifespan(app: FastAPI):
             # Start background tip reminder / expiry loop
             bot_task = asyncio.create_task(run_tip_reminder_loop())
             logger.info("Background tip reminder loop started.")
+            digest_task = asyncio.create_task(run_weekly_digest_loop())
+            logger.info("Weekly digest loop started.")
         except Exception as e:  # noqa: BLE001 - app must still boot even if the bot fails
             logger.error(f"Failed to start Telegram Bot: {e}")
 
@@ -98,12 +102,13 @@ async def lifespan(app: FastAPI):
     if settings.bot_token and settings.bot_token != "sandbox_bot_token":
         try:
             logger.info("Stopping Telegram Bot...")
-            if bot_task is not None:
-                bot_task.cancel()
-                try:
-                    await bot_task
-                except asyncio.CancelledError:
-                    pass
+            for task in (bot_task, digest_task):
+                if task is not None:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
             telegram_app = get_telegram_application()
             if telegram_app.updater:
                 await telegram_app.updater.stop()

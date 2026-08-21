@@ -30,8 +30,10 @@ from app.bot.handlers import (
     channel_post_generator,
     confirm_registration_callback,
     dispute_command,
+    endgoal_command,
     export_command,
     freeze_command,
+    goal_command,
     help_command,
     inline_query_handler,
     mytips_command,
@@ -45,6 +47,7 @@ from app.bot.handlers import (
     subscription_callback,
     text_input_handler,
     tip_amount_callback,
+    topfans_command,
     unfreeze_command,
     verifyaccount_command,
 )
@@ -62,6 +65,8 @@ async def post_init_setup(application: Application) -> None:
         BotCommand("register", "Link your payment method (mobile money / bank)"),
         BotCommand("post", "Generate channel post & tip button"),
         BotCommand("mytips", "View total earnings & tips history"),
+        BotCommand("goal", "Set a fundraising goal (live progress bar)"),
+        BotCommand("topfans", "See this month's top supporters"),
         BotCommand("verifyaccount", "Prove your payout account is yours"),
         BotCommand("pro", "Upgrade to Tipa Pro (CSV export & more)"),
         BotCommand("export", "Download your tips as CSV or PDF"),
@@ -123,6 +128,9 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(registration_conv)
     app.add_handler(CommandHandler("mytips", mytips_command))
+    app.add_handler(CommandHandler("goal", goal_command))
+    app.add_handler(CommandHandler("endgoal", endgoal_command))
+    app.add_handler(CommandHandler("topfans", topfans_command))
     app.add_handler(CommandHandler("verifyaccount", verifyaccount_command))
     app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("pro", pro_command))

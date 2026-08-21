@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     tip_expiry_hours: float = 72.0
     tip_reminder_loop_minutes: float = 30.0
 
+    # Weekly digest DM cadence (per-creator anchored, dedup via last_weekly_digest_at)
+    weekly_digest_days: int = 7
+    digest_loop_minutes: float = 60.0
+
     # Tipa Pro subscription (creators pay Tipa directly; same no-custody flow)
     pro_price_birr: float = 199.0
     pro_duration_days: int = 30
