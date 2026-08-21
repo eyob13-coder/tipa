@@ -1444,6 +1444,17 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
             extracted_ref = match.group(1).upper()
 
     if not extracted_ref:
+        # Preferred: vision LLM reads structured data from the screenshot (#8).
+        try:
+            from app.receipt_vision import parse_receipt_image
+
+            vision = await parse_receipt_image(bytes(photo_bytes))
+            if vision and vision.get("reference"):
+                extracted_ref = str(vision["reference"]).upper()
+        except Exception:
+            logger.warning("Vision receipt parsing fallback failed", exc_info=True)
+
+    if not extracted_ref:
         extracted_ref = extract_ref_code_from_image(bytes(photo_bytes))
 
     if extracted_ref:

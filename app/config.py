@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Optional error tracking (sentry-sdk is imported only when a DSN is set).
     sentry_dsn: str = ""
 
+    # Optional vision-LLM receipt reading (#8): any OpenAI-compatible endpoint.
+    # When the key is empty, receipts fall back to local pytesseract OCR.
+    vision_llm_api_key: str = ""
+    vision_llm_base_url: str = "https://api.openai.com/v1"
+    vision_llm_model: str = "gpt-4o-mini"
+
     @property
     def admin_ids(self) -> set[int]:
         return {
