@@ -1460,6 +1460,20 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
+def _resolve_claim_reference(text: str) -> tuple[str, bool]:
+    """Accept either a bare reference code or a pasted/forwarded payment SMS.
+
+    Returns (reference, from_sms). Falls back to the raw text when nothing
+    SMS-like is detected so existing bare-code behaviour is unchanged.
+    """
+    from app.sms_parse import parse_payment_sms
+
+    parsed = parse_payment_sms(text)
+    if parsed:
+        return parsed.reference, True
+    return text.strip(), False
+
+
 async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle custom tip amount, note entry, or payment reference code."""
     if not update.effective_message or not update.effective_message.text:
@@ -1469,7 +1483,7 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Case 0: Pending Tipa Pro payment reference code
     if context.user_data.pop("pending_pro_ref", None):
-        clean_ref = text.strip()
+        clean_ref, _from_sms = _resolve_claim_reference(text)
         if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
             context.user_data["pending_pro_ref"] = True
             await update.effective_message.reply_text(
@@ -1484,7 +1498,7 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Case 0.5: Pending account-ownership deposit reference code
     if context.user_data.pop("pending_av_ref", None):
-        clean_ref = text.strip()
+        clean_ref, _from_sms = _resolve_claim_reference(text)
         if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
             context.user_data["pending_av_ref"] = True
             await update.effective_message.reply_text(
@@ -1500,7 +1514,13 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Case A: Pending transaction reference verification code
     if "pending_verify_tip_id" in context.user_data:
         tip_id_str = context.user_data.get("pending_verify_tip_id")
-        clean_ref = text.strip()
+        clean_ref, from_sms = _resolve_claim_reference(text)
+        if from_sms:
+            # Whole SMS pasted/forwarded — acknowledge the magic briefly.
+            await update.effective_message.reply_text(
+                f"🔎 Detected transaction reference `{clean_ref}` from your SMS…",
+                parse_mode="Markdown",
+            )
 
         # Validate reference code format (must be 6-30 alphanumeric characters)
         if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
