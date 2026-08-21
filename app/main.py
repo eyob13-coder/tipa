@@ -5,7 +5,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from telegram import Update as TelegramUpdate
@@ -254,6 +259,44 @@ async def metrics():
         bucket = providers.setdefault(provider, {})
         bucket[status] = bucket.get(status, 0) + count
     return {"window_hours": 24, "providers": providers}
+
+
+@app.get("/overlay/{creator_id}")
+async def overlay_page(creator_id):
+    """OBS browser-source page showing live tip alerts for one creator."""
+    from app.overlay import render_overlay_page
+
+    return HTMLResponse(render_overlay_page(creator_id))
+
+
+@app.get("/overlay/{creator_id}/stream")
+async def overlay_stream(creator_id: str):
+    """SSE stream of verified-tip events for the overlay page."""
+    import asyncio
+
+    from app.overlay import _KEEPALIVE_SECONDS, format_sse, subscribe, unsubscribe
+
+    queue = subscribe(creator_id)
+
+    async def event_stream():
+        try:
+            yield "retry: 3000\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_KEEPALIVE_SECONDS
+                    )
+                    yield format_sse(event)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            unsubscribe(creator_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/miniapp", response_class=FileResponse)

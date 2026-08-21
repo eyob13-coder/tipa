@@ -1903,6 +1903,21 @@ async def handle_creator_approval(
                 except Exception:
                     logger.exception("VIP unlock failed after approving tip %s", tip.id)
 
+            # Live overlay alert for OBS viewers.
+            try:
+                from app.overlay import publish_tip
+
+                publish_tip(
+                    str(creator.id),
+                    {
+                        "amount": float(tip.amount),
+                        "tipper": tip.tipper_display_name,
+                        "note": tip.note,
+                    },
+                )
+            except Exception:
+                logger.exception("Overlay publish failed after approving tip %s", tip.id)
+
             note_str = f" (*\"{tip.note}\"*)" if tip.note else ""
             await query.edit_message_text(
                 f"🎉 **Tip Approved & Verified!**\n\n"

@@ -113,6 +113,17 @@ async def auto_verify_tip(
             await send_unlock_invite(str(tip.id))
 
         asyncio.create_task(_unlock())
+
+        # Live overlay alert for OBS viewers (in-process hub).
+        try:
+            from app.overlay import publish_tip
+
+            publish_tip(
+                str(tip.creator_id),
+                {"amount": float(tip.amount), "tipper": tip.tipper_display_name, "note": tip.note},
+            )
+        except Exception:
+            logger.exception("Overlay publish failed for tip %s", tip.id)
     else:
         logger.info(
             "Verification did not confirm tip %s: provider=%s status=%s verified=%s amount=%s",
