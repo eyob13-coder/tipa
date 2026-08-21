@@ -256,6 +256,74 @@ async def _creator_for_export(session, identifier: str, init_data: str) -> Creat
     return creator
 
 
+@router.get("/public/creators/{identifier}")
+async def get_public_creator_stats(identifier: str, request: Request):
+    """Unauthenticated, read-only public stats for a creator (#9).
+
+    Exposes ONLY public-safe data (display name, aggregate totals, recent
+    tipper names/amounts). Payout account details are never included.
+    Rate limited per client IP; identifier is the creator UUID or telegram id,
+    same as the tipping page.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed = await _consume_rate_bucket(f"pubstats:{client_ip}", 60, 60.0)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many requests.")
+
+    async with AsyncSessionLocal() as session:
+        creator = None
+        try:
+            stmt = select(Creator).where(Creator.id == uuid.UUID(identifier))
+            creator = (await session.execute(stmt)).scalar_one_or_none()
+        except ValueError:
+            pass
+
+        if not creator and identifier.isdigit():
+            stmt = select(Creator).where(Creator.telegram_id == int(identifier))
+            creator = (await session.execute(stmt)).scalar_one_or_none()
+
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+
+        tot_stmt = (
+            select(func.coalesce(func.sum(Tip.amount), 0), func.count(Tip.id))
+            .where(Tip.creator_id == creator.id)
+            .where(Tip.status == "success")
+        )
+        total_amount, total_count = (
+            await session.execute(tot_stmt)
+        ).first() or (0, 0)
+
+        rec_stmt = (
+            select(Tip)
+            .where(Tip.creator_id == creator.id, Tip.status == "success")
+            .order_by(desc(Tip.verified_at), desc(Tip.created_at))
+            .limit(10)
+        )
+        rec_res = await session.execute(rec_stmt)
+        recent = list(rec_res.scalars().all())
+
+        return {
+            "id": str(creator.id),
+            "display_name": creator.display_name,
+            "total_earned": float(total_amount),
+            "tip_count": total_count,
+            "member_since": creator.created_at.strftime("%Y-%m-%d"),
+            "recent_tips": [
+                {
+                    "tipper_name": t.tipper_display_name or "Anonymous",
+                    "amount": float(t.amount),
+                    "date": (
+                        t.verified_at.strftime("%Y-%m-%d %H:%M")
+                        if t.verified_at
+                        else t.created_at.strftime("%Y-%m-%d %H:%M")
+                    ),
+                }
+                for t in recent
+            ],
+        }
+
+
 async def _verified_tips_for(session, creator: Creator) -> list[Tip]:
     stmt = (
         select(Tip)

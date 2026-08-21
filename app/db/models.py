@@ -245,6 +245,25 @@ class VerificationLog(Base):
     tip: Mapped["Tip"] = relationship("Tip")
 
 
+class CreatorWebhook(Base):
+    """Per-creator outbound webhook endpoint receiving HMAC-signed tip events."""
+
+    __tablename__ = "creator_webhooks"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class RateLimitBucket(Base):
     """Fixed-window rate-limit counters shared across workers/replicas.
 

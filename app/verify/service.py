@@ -114,6 +114,11 @@ async def auto_verify_tip(
 
         asyncio.create_task(_unlock())
 
+        # Outbound signed webhook (fire-and-forget).
+        from app.webhooks import deliver_tip_verified
+
+        asyncio.create_task(deliver_tip_verified(str(tip.id)))
+
         # Live overlay alert for OBS viewers (in-process hub).
         try:
             from app.overlay import publish_tip

@@ -1918,6 +1918,16 @@ async def handle_creator_approval(
             except Exception:
                 logger.exception("Overlay publish failed after approving tip %s", tip.id)
 
+            # Outbound signed webhook (fire-and-forget).
+            try:
+                import asyncio as _asyncio
+
+                from app.webhooks import deliver_tip_verified
+
+                _asyncio.create_task(deliver_tip_verified(str(tip.id)))
+            except Exception:
+                logger.exception("Webhook scheduling failed after approving tip %s", tip.id)
+
             note_str = f" (*\"{tip.note}\"*)" if tip.note else ""
             await query.edit_message_text(
                 f"🎉 **Tip Approved & Verified!**\n\n"
@@ -2077,6 +2087,39 @@ async def unsetvip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else "You don't have VIP unlock enabled.",
         parse_mode="Markdown",
     )
+
+
+async def webhook_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Register an HMAC-signed webhook endpoint (`/webhook https://...`, `/webhook off`)."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    from app.webhooks import disable_webhook, set_webhook
+
+    args = (context.args or []) if context.args else []
+    raw = " ".join(args).strip()
+
+    if not raw or raw.lower() == "help":
+        await update.effective_message.reply_text(
+            "🔗 **Webhooks** — get a POST for every verified tip.\n\n"
+            "`/webhook https://yourapp.com/tipa` — register & receive your signing secret\n"
+            "`/webhook off` — disable delivery\n\n"
+            "Events carry headers `X-Tipa-Event: tip.verified` and "
+            "`X-Tipa-Signature` (HMAC-SHA256 hex of the raw body keyed by your secret).",
+            parse_mode="Markdown",
+        )
+        return
+
+    if raw.lower() in ("off", "disable", "remove"):
+        removed = await disable_webhook(update.effective_user.id)
+        await update.effective_message.reply_text(
+            "🔕 Webhook disabled." if removed else "You don't have an active webhook.",
+            parse_mode="Markdown",
+        )
+        return
+
+    _ok, message = await set_webhook(update.effective_user.id, raw)
+    await update.effective_message.reply_text(message, parse_mode="Markdown")
 
 
 async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -53,6 +53,7 @@ from app.bot.handlers import (
     unfreeze_command,
     unsetvip_command,
     verifyaccount_command,
+    webhook_command,
 )
 from app.config import settings
 
@@ -141,6 +142,7 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("poster", poster_command))
     app.add_handler(CommandHandler("setvip", setvip_command))
     app.add_handler(CommandHandler("unsetvip", unsetvip_command))
+    app.add_handler(CommandHandler("webhook", webhook_command))
     app.add_handler(CommandHandler("pro", pro_command))
     app.add_handler(CommandHandler("post", channel_post_generator))
     app.add_handler(CommandHandler("addchannel", addchannel_command))
