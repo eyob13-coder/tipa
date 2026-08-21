@@ -83,6 +83,8 @@ class Creator(Base):
     last_weekly_digest_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Optional private channel every verified tipper is invited into (pay-to-unlock).
+    vip_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

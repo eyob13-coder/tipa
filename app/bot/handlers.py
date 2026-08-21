@@ -1894,6 +1894,15 @@ async def handle_creator_approval(
             except Exception:
                 logger.exception("Goal refresh failed after approving tip %s", tip.id)
 
+            # Pay-to-unlock: DM the tipper a one-time VIP channel invite.
+            if tip.tipper_telegram_id:
+                try:
+                    from app.unlock import send_unlock_invite
+
+                    await send_unlock_invite(str(tip.id), bot=context.bot)
+                except Exception:
+                    logger.exception("VIP unlock failed after approving tip %s", tip.id)
+
             note_str = f" (*\"{tip.note}\"*)" if tip.note else ""
             await query.edit_message_text(
                 f"🎉 **Tip Approved & Verified!**\n\n"
@@ -2010,6 +2019,47 @@ async def poster_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "Print it for your café, shop, studio, or event table — "
             "one scan opens your tipping page. A4 size."
         ),
+        parse_mode="Markdown",
+    )
+
+
+async def setvip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enable pay-to-unlock: verified tippers get a one-time VIP channel invite."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    from app.unlock import set_vip_channel
+
+    # Preferred input: forward any post from the private channel.
+    forwarded_chat = getattr(update.effective_message, "forward_origin", None)
+    source_chat = None
+    if forwarded_chat is not None and hasattr(forwarded_chat, "chat"):
+        source_chat = forwarded_chat.chat
+    elif getattr(update.effective_message, "forward_from_chat", None):
+        source_chat = update.effective_message.forward_from_chat  # legacy field
+
+    if source_chat is not None:
+        raw = str(source_chat.id)
+    else:
+        args = (context.args or []) if context.args else []
+        raw = " ".join(args)
+
+    _ok, message = await set_vip_channel(update.effective_user.id, raw)
+    await update.effective_message.reply_text(message, parse_mode="Markdown")
+
+
+async def unsetvip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disable VIP unlock invites."""
+    if not update.effective_message or not update.effective_user:
+        return
+
+    from app.unlock import unset_vip_channel
+
+    removed = await unset_vip_channel(update.effective_user.id)
+    await update.effective_message.reply_text(
+        "🔓 **VIP Unlock disabled.** Future tips won't include channel invites."
+        if removed
+        else "You don't have VIP unlock enabled.",
         parse_mode="Markdown",
     )
 

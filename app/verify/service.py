@@ -100,12 +100,19 @@ async def auto_verify_tip(
             ref_code,
             result.amount,
         )
-        # Fire-and-forget: refresh any bound tip-goal post / celebrate.
+        # Fire-and-forget side effects: goal refresh + VIP unlock invite.
         import asyncio
 
         from app.goals import on_tip_verified
 
         asyncio.create_task(on_tip_verified(str(tip.id)))
+
+        async def _unlock() -> None:
+            from app.unlock import send_unlock_invite
+
+            await send_unlock_invite(str(tip.id))
+
+        asyncio.create_task(_unlock())
     else:
         logger.info(
             "Verification did not confirm tip %s: provider=%s status=%s verified=%s amount=%s",
