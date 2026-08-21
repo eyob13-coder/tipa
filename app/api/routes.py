@@ -3,11 +3,10 @@ import hmac
 import io
 import json
 import logging
-import time
 import urllib.parse
 import uuid
-from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -19,7 +18,7 @@ from app.bot.bot import get_telegram_application
 from app.bot.keyboards import get_creator_approval_keyboard
 from app.bot.notifications import notify_tip_success
 from app.config import settings
-from app.db.models import Creator, Tip
+from app.db.models import Creator, RateLimitBucket, Tip
 from app.db.session import AsyncSessionLocal
 from app.export import build_tips_csv
 from app.payment_methods import (
@@ -83,19 +82,42 @@ def require_valid_init_data(x_telegram_init_data: str = Header(default="")) -> s
 
 CLAIM_RATE_LIMIT = 10
 CLAIM_RATE_WINDOW_SECONDS = 60.0
-_claim_windows: "dict[str, deque[float]]" = defaultdict(deque)
 
 
-def limit_claim_rate(request: Request) -> None:
-    """Dependency: sliding-window rate limit on the claim endpoint per client IP."""
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+async def limit_claim_rate(request: Request) -> None:
+    """Fixed-window rate limit on the claim endpoint per client IP.
+
+    Counters live in the database so the limit is shared across uvicorn
+    workers and replicas (the old in-memory deque reset on every restart,
+    was per-process, and leaked an entry for every client IP).
+    """
     client_ip = request.client.host if request.client else "unknown"
-    now = time.monotonic()
-    window = _claim_windows[client_ip]
-    while window and now - window[0] > CLAIM_RATE_WINDOW_SECONDS:
-        window.popleft()
-    if len(window) >= CLAIM_RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Too many claims. Please try again later.")
-    window.append(now)
+    key = f"claim:{client_ip}"
+    now = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(RateLimitBucket).where(RateLimitBucket.key == key)
+        row = (await session.execute(stmt)).scalar_one_or_none()
+
+        if row is None or _as_utc(row.window_started_at) <= now - timedelta(seconds=CLAIM_RATE_WINDOW_SECONDS):
+            if row is None:
+                session.add(RateLimitBucket(key=key, window_started_at=now, count=1))
+            else:
+                row.window_started_at = now
+                row.count = 1
+            await session.commit()
+            return
+
+        row.count += 1
+        await session.commit()
+        if row.count > CLAIM_RATE_LIMIT:
+            raise HTTPException(status_code=429, detail="Too many claims. Please try again later.")
 
 
 router = APIRouter(prefix="/api", tags=["miniapp"])
@@ -103,7 +125,7 @@ router = APIRouter(prefix="/api", tags=["miniapp"])
 
 class TipInitRequest(BaseModel):
     creator_id: str
-    amount: float = Field(..., gt=0, le=50000)
+    amount: Decimal = Field(..., gt=0, le=Decimal(50000))
     note: str | None = None
     post_id: str | None = None
     tipper_telegram_id: int | None = None

@@ -1,6 +1,7 @@
 import uuid
 import uuid as uuid_pkg
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -69,6 +70,11 @@ class Creator(Base):
     account_number: Mapped[str] = mapped_column(String, nullable=False)
     account_name: Mapped[str] = mapped_column(String, nullable=False)
     channel_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Ownership proof: creator sends a small coded transfer from the registered
+    # account to Tipa's account, verified like any other payment receipt.
+    account_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    account_verification_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    account_verification_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -94,8 +100,8 @@ class Tip(Base):
     tipper_display_name: Mapped[str | None] = mapped_column(
         String, nullable=True
     )
-    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    platform_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    platform_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     tx_ref: Mapped[str] = mapped_column(
         String, unique=True, nullable=False, index=True
     )
@@ -122,9 +128,11 @@ class Tip(Base):
     verification_method: Mapped[str | None] = mapped_column(
         String, nullable=True
     )  # provider name ('verify_et' | 'check_et' | 'justverify') | 'creator_approval'
-    verified_amount: Mapped[float | None] = mapped_column(
-        Numeric(10, 2), nullable=True
+    verified_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
     )
+    # Persisted receipt screenshot (dispute evidence); stored on disk/blob.
+    receipt_file_path: Mapped[str | None] = mapped_column(String, nullable=True)
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="tips")
 
@@ -148,7 +156,7 @@ class Subscription(Base):
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", index=True
     )  # 'pending' | 'pending_verification' | 'active' | 'expired' | 'rejected'
-    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     tx_ref: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     ref_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -177,10 +185,24 @@ class VerificationLog(Base):
     provider: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     tip: Mapped["Tip"] = relationship("Tip")
+
+
+class RateLimitBucket(Base):
+    """Fixed-window rate-limit counters shared across workers/replicas.
+
+    Replaces the old per-process in-memory sliding window, which was useless
+    with multiple uvicorn workers and leaked memory for every client IP.
+    """
+
+    __tablename__ = "rate_limit_buckets"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

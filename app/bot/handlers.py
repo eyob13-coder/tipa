@@ -3,6 +3,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 import pytesseract
 from PIL import Image
@@ -21,7 +22,9 @@ from telegram.ext import (
 )
 
 from app.bot.keyboards import (
+    get_admin_account_verification_keyboard,
     get_admin_subscription_keyboard,
+    get_av_transfer_keyboard,
     get_channel_post_button,
     get_confirm_registration_keyboard,
     get_creator_approval_keyboard,
@@ -51,12 +54,23 @@ from app.subscriptions import (
     is_pro,
     log_subscription_verification,
 )
-from app.verify.service import auto_verify_tip, log_verification_attempt
+from app.verify.base import VerificationError, VerifyResult
+from app.verify.registry import verify_registry
+from app.verify.service import (
+    ACCOUNT_NUMBER_METHODS,
+    _amount_matches,
+    auto_verify_tip,
+    log_verification_attempt,
+)
 
 logger = logging.getLogger(__name__)
 
 # Conversation states for registration
 METHOD_CHOICE, ACCOUNT_NUM, ACCOUNT_NAME, CHANNEL_LINK, CONFIRMATION = range(5)
+
+# Amount bounds shared by the bot tip flow (mirrors the Mini App API limits).
+MIN_TIP_BIRR = Decimal(5)
+MAX_TIP_BIRR = Decimal(50000)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -250,14 +264,18 @@ async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle Pro payment claim, cancel, and admin approval callbacks."""
+    """Handle Pro/AV payment claims, cancels, and admin approval callbacks.
+
+    Approval callbacks answer themselves inside their handlers (so the first
+    answer can carry an alert); the simple ack/cancel branches answer here.
+    """
     query = update.callback_query
     if not query or not query.data or not query.from_user:
         return
-    await query.answer()
 
     data = query.data
     if data == "pro_sent":
+        await query.answer()
         context.user_data["pending_pro_ref"] = True
         await query.edit_message_text(
             "📝 **Pro Payment Confirmation**\n\n"
@@ -266,13 +284,31 @@ async def subscription_callback(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown",
         )
     elif data == "pro_cancel":
+        await query.answer()
         context.user_data.pop("pending_pro_ref", None)
         await query.edit_message_text("❌ Pro upgrade cancelled. Run `/pro` anytime!")
+    elif data == "av_sent":
+        await query.answer()
+        context.user_data["pending_av_ref"] = True
+        await query.edit_message_text(
+            "📝 **Deposit Confirmation**\n\n"
+            "Please send the transaction **Reference Number** / **SMS Code** from your deposit "
+            "(e.g., `TLB12345678` or `FT12345678`):",
+            parse_mode="Markdown",
+        )
+    elif data == "av_cancel":
+        await query.answer()
+        context.user_data.pop("pending_av_ref", None)
+        await query.edit_message_text("❌ Verification cancelled. Run `/verifyaccount` anytime!")
     elif data.startswith(("approve_sub:", "reject_sub:")):
-        # Admin approval buttons require answering inside the handler.
         sub_id_str = data.split(":", 1)[1]
         await handle_admin_subscription_approval(
             update, context, sub_id_str, is_approve=data.startswith("approve_sub:")
+        )
+    elif data.startswith(("approve_av:", "reject_av:")):
+        creator_id_str = data.split(":", 1)[1]
+        await handle_admin_account_verification(
+            update, context, creator_id_str, is_approve=data.startswith("approve_av:")
         )
 
 
@@ -477,6 +513,265 @@ async def handle_admin_subscription_approval(
                     )
                 except TelegramError as e:
                     logger.error("Failed to notify creator about Pro rejection: %s", e)
+
+
+async def _verify_account_deposit(ref_code: str) -> VerifyResult | None:
+    """Verify the ownership-proof micro-deposit against Tipa's receiving account."""
+    if not verify_registry.enabled_providers:
+        return None
+    bank = settings.tipa_receiving_method
+    account_number = settings.tipa_receiving_account if bank in ACCOUNT_NUMBER_METHODS else None
+    try:
+        return await verify_registry.verify(
+            bank=bank,
+            reference=ref_code,
+            account_number=account_number,
+            idempotency_key=f"av-{ref_code}",
+        )
+    except VerificationError as e:
+        logger.exception("verify registry failed for account verification ref %s", ref_code)
+        return VerifyResult(request_success=False, message=str(e))
+
+
+async def verifyaccount_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Prove ownership of the registered receiving account via a coded micro-deposit.
+
+    Without this, anyone could register someone else's phone/account number and
+    collect their tips, or a typo would silently route money into the void.
+    """
+    if not update.effective_message or not update.effective_user:
+        return
+
+    if not settings.tipa_receiving_account:
+        await update.effective_message.reply_text(
+            "🔐 Account verification isn't configured yet — please try again later.",
+            parse_mode="Markdown",
+        )
+        return
+
+    user_id = update.effective_user.id
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+        if not creator:
+            await update.effective_message.reply_text(
+                "❌ You must `/register` first, then run `/verifyaccount`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        if creator.account_verified:
+            await update.effective_message.reply_text(
+                "✅ Your account is already verified. You're all set!",
+                parse_mode="Markdown",
+            )
+            return
+
+        code = f"av_{uuid.uuid4().hex[:8]}"
+        creator.account_verification_code = code
+        creator.account_verification_ref = None
+        await session.commit()
+        method_str = method_name(creator.payment_method)
+
+    amount = settings.account_verification_amount_birr
+    instructions = (
+        f"🔐 **Verify Account Ownership**\n\n"
+        f"To protect your tips, prove that `{creator.account_number}` ({method_str}) belongs to you:\n\n"
+        f"1️⃣ Send exactly **{amount:g} ETB** **from your registered {method_str} account** "
+        f"to Tipa's account: `{settings.tipa_receiving_account}`\n"
+        f"2️⃣ If your app allows a note/reference, include: `{code}`\n"
+        f"3️⃣ Tap **I Have Sent the Deposit** below and submit your receipt reference code.\n\n"
+        f"⚠️ The deposit must come from the account you registered — it's checked against your verification code."
+    )
+
+    await update.effective_message.reply_text(
+        instructions,
+        reply_markup=get_av_transfer_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def process_account_verification_claim(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    ref_code: str,
+) -> None:
+    """Verify the ownership deposit; auto-activate or route to admin approval."""
+    if not update.effective_user or not update.effective_message:
+        return
+    user_id = update.effective_user.id
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(Creator).where(Creator.telegram_id == user_id)
+        res = await session.execute(stmt)
+        creator = res.scalar_one_or_none()
+
+        if not creator or not creator.account_verification_code:
+            await update.effective_message.reply_text(
+                "❌ No verification in progress. Run `/verifyaccount` first.",
+                parse_mode="Markdown",
+            )
+            return
+
+        dup_stmt = (
+            select(Creator.id)
+            .where(
+                Creator.account_verification_ref == ref_code,
+                Creator.id != creator.id,
+            )
+            .limit(1)
+        )
+        dup_res = await session.execute(dup_stmt)
+        if dup_res.first() is not None:
+            await update.effective_message.reply_text(
+                f"❌ The code `{ref_code}` was already used for another verification.",
+                parse_mode="Markdown",
+            )
+            return
+
+        creator.account_verification_ref = ref_code
+        await session.commit()
+
+        result = await _verify_account_deposit(ref_code)
+        verified = (
+            result is not None
+            and result.verified
+            and _amount_matches(result.amount, settings.account_verification_amount_birr)
+        )
+
+        await log_verification_attempt(
+            session,
+            tip_id=None,
+            provider=result.provider if result else "none",
+            status=result.status if result else "unavailable",
+            verified=verified,
+            amount=result.amount if result else None,
+            message="Account ownership verification deposit",
+        )
+
+        if verified:
+            creator.account_verified = True
+            creator.account_verification_code = None
+            creator.account_verification_ref = None
+            await session.commit()
+            await update.effective_message.reply_text(
+                "🎉 **Account Verified!**\n\n"
+                "Your ownership of this receiving account is confirmed. Tippers can now trust "
+                "that their tips reach you. Thank you for keeping Tipa safe! 🙏",
+                parse_mode="Markdown",
+            )
+            return
+
+    admins = settings.admin_ids
+    if admins:
+        try:
+            from app.bot.bot import get_telegram_application
+
+            bot_app = get_telegram_application()
+            for admin_id in admins:
+                try:
+                    await bot_app.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"🔐 **New Account Ownership Claim**\n\n"
+                            f"Creator: **{creator.display_name}** (`{creator.telegram_id}`)\n"
+                            f"Account: `{creator.account_number}` ({method_name(creator.payment_method)})\n"
+                            f"Deposit Ref: `{ref_code}`\n\n"
+                            f"Auto-verification did not confirm it. Review manually:"
+                        ),
+                        reply_markup=get_admin_account_verification_keyboard(str(creator.id)),
+                        parse_mode="Markdown",
+                    )
+                except TelegramError as e:
+                    logger.error("Failed to notify admin %s about ownership claim: %s", admin_id, e)
+        except Exception:
+            logger.exception("Failed to notify admins about ownership claim")
+
+    await update.effective_message.reply_text(
+        "✅ **Deposit Submitted!**\n\n"
+        "We couldn't auto-verify it yet — our team will review it shortly. "
+        "You'll get a message once your account is verified! 🙏",
+        parse_mode="Markdown",
+    )
+
+
+async def handle_admin_account_verification(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    creator_id_str: str,
+    is_approve: bool,
+) -> None:
+    """Admin-only manual Approve/Reject for an account-ownership deposit."""
+    query = update.callback_query
+    if not query:
+        return
+
+    if query.from_user.id not in settings.admin_ids:
+        await query.answer("⛔ Only Tipa admins can do this.", show_alert=True)
+        return
+    await query.answer()
+
+    try:
+        creator_uuid = uuid.UUID(creator_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid creator ID.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        creator = await session.get(Creator, creator_uuid)
+        if not creator:
+            await query.edit_message_text("❌ Creator not found.")
+            return
+
+        if creator.account_verified or not creator.account_verification_ref:
+            await query.answer("This verification was already processed.", show_alert=True)
+            return
+
+        if is_approve:
+            creator.account_verified = True
+            creator.account_verification_code = None
+            creator.account_verification_ref = None
+            await session.commit()
+            await log_verification_attempt(
+                session,
+                tip_id=None,
+                provider="admin_approval",
+                status="success",
+                verified=True,
+                amount=settings.account_verification_amount_birr,
+                message="Ownership approved manually by a Tipa admin",
+            )
+            await query.edit_message_text(f"✅ **Ownership Approved** for {creator.display_name}.")
+        else:
+            # Keep the verification code so the creator can retry with a fresh deposit.
+            creator.account_verification_ref = None
+            await session.commit()
+            await log_verification_attempt(
+                session,
+                tip_id=None,
+                provider="admin_approval",
+                status="rejected",
+                verified=False,
+                amount=settings.account_verification_amount_birr,
+                message="Ownership rejected by a Tipa admin",
+            )
+            await query.edit_message_text(f"❌ **Ownership Claim Rejected** for {creator.display_name}.")
+
+        try:
+            await context.bot.send_message(
+                chat_id=creator.telegram_id,
+                text=(
+                    "🎉 **Account Verified!** Your receiving account ownership is confirmed."
+                    if is_approve
+                    else "❌ **Verification Not Confirmed**\n\nYour ownership deposit couldn't be verified. "
+                    "Run `/verifyaccount` to retry with a fresh deposit, or contact support."
+                ),
+                parse_mode="Markdown",
+            )
+        except TelegramError as e:
+            logger.error("Failed to notify creator about ownership decision: %s", e)
 
 
 async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -714,6 +1009,8 @@ async def confirm_registration_callback(update: Update, context: ContextTypes.DE
             f"🎉 **Registration Successful!**\n\n"
             f"Configured Payment Method: **{method_code.upper()}**\n\n"
             f"🔗 **Your Personal Tipping Deep Link:**\n`{deep_link}`\n\n"
+            f"🔐 **Recommended:** Run `/verifyaccount` to prove you own this account — "
+            f"it protects your tips from being sent to the wrong place.\n\n"
             f"💡 **Pro Tip:** Run `/post` to get an inline tip button for your Telegram channel posts!",
             parse_mode="Markdown",
         )
@@ -754,7 +1051,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if data.startswith("tip_amt:"):
         parts = data.split(":")
         creator_id_str = parts[1]
-        amount = float(parts[2])
+        amount = Decimal(parts[2])
 
         keyboard = get_tip_note_prompt_keyboard(creator_id_str, amount)
         await query.edit_message_text(
@@ -777,7 +1074,7 @@ async def tip_amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif data.startswith("tip_add_note:"):
         parts = data.split(":")
         creator_id_str = parts[1]
-        amount = float(parts[2])
+        amount = Decimal(parts[2])
         context.user_data["pending_note_data"] = (creator_id_str, amount)
 
         await query.edit_message_text(
@@ -857,6 +1154,14 @@ async def receipt_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
     photo_file = await photo.get_file()
     photo_bytes = await photo_file.download_as_bytearray()
 
+    # Persist the screenshot as dispute evidence before anything else.
+    from app.storage import save_receipt_photo
+
+    receipt_path = save_receipt_photo(tip_id_str, bytes(photo_bytes))
+    if receipt_path:
+        # Keyed to the tip so an abandoned upload never lands on another claim.
+        context.user_data["pending_receipt_path"] = (tip_id_str, receipt_path)
+
     caption = (update.effective_message.caption or "").strip()
     extracted_ref = None
 
@@ -908,6 +1213,21 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await process_subscription_claim(update, context, ref_code=clean_ref)
         return
 
+    # Case 0.5: Pending account-ownership deposit reference code
+    if context.user_data.pop("pending_av_ref", None):
+        clean_ref = text.strip()
+        if not re.match(r"^[A-Za-z0-9\-_]{6,30}$", clean_ref):
+            context.user_data["pending_av_ref"] = True
+            await update.effective_message.reply_text(
+                "⚠️ **Invalid Reference / SMS Code Format**\n\n"
+                "Please enter a valid transaction reference code (e.g. Telebirr `TLB12345678` or CBE `FT12345678`) "
+                "with at least 6 characters, no spaces or special symbols:",
+                parse_mode="Markdown",
+            )
+            return
+        await process_account_verification_claim(update, context, ref_code=clean_ref)
+        return
+
     # Case A: Pending transaction reference verification code
     if "pending_verify_tip_id" in context.user_data:
         tip_id_str = context.user_data.get("pending_verify_tip_id")
@@ -944,17 +1264,23 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if "pending_tip_creator_id" in context.user_data:
         creator_id_str = context.user_data.pop("pending_tip_creator_id")
         try:
-            amount = float(text)
-            if amount < 5:
-                await update.effective_message.reply_text("⚠️ Minimum tip amount is 5 Birr. Please try again:")
+            amount = Decimal(text)
+            if amount != amount.quantize(Decimal("0.01")):
+                await update.effective_message.reply_text(
+                    "⚠️ Amounts support at most two decimal places (e.g. 75 or 75.50). Please try again:"
+                )
                 context.user_data["pending_tip_creator_id"] = creator_id_str
                 return
-            if amount > 50000:
-                await update.effective_message.reply_text("⚠️ Maximum single tip amount is 50,000 Birr. Please try again:")
-                context.user_data["pending_tip_creator_id"] = creator_id_str
-                return
-        except ValueError:
+        except InvalidOperation:
             await update.effective_message.reply_text("⚠️ Invalid number. Please enter a numerical amount in Birr (e.g. 75):")
+            context.user_data["pending_tip_creator_id"] = creator_id_str
+            return
+        if amount < MIN_TIP_BIRR:
+            await update.effective_message.reply_text(f"⚠️ Minimum tip amount is {MIN_TIP_BIRR:g} Birr. Please try again:")
+            context.user_data["pending_tip_creator_id"] = creator_id_str
+            return
+        if amount > MAX_TIP_BIRR:
+            await update.effective_message.reply_text(f"⚠️ Maximum single tip amount is {MAX_TIP_BIRR:g} Birr. Please try again:")
             context.user_data["pending_tip_creator_id"] = creator_id_str
             return
 
@@ -1120,6 +1446,10 @@ async def process_tip_verification_claim(
 
         tip.ref_id = ref_code
         tip.claimed_at = datetime.now(timezone.utc)
+        pending_receipt = context.user_data.get("pending_receipt_path")
+        if pending_receipt and pending_receipt[0] == tip_id_str:
+            tip.receipt_file_path = pending_receipt[1]
+            context.user_data.pop("pending_receipt_path", None)
         await session.commit()
 
         verify_result = await auto_verify_tip(session, tip, creator, ref_code)
@@ -1180,16 +1510,22 @@ async def handle_creator_approval(
     tip_id_str: str,
     is_approve: bool,
 ) -> None:
-    """Handle Creator's 1-tap Approve or Reject inline callback."""
+    """Handle Creator's 1-tap Approve or Reject inline callback.
+
+    Authorization: only the receiving creator may process a tip claim —
+    callback data is client-controlled, so anyone who obtains the approval
+    message (forwarded, screenshotted into another chat) must be rejected.
+    State guard: already-processed tips (approved, rejected, expired) are
+    final; double-taps never overwrite state.
+    """
     query = update.callback_query
     if not query:
         return
-    await query.answer()
 
     try:
         tip_uuid = uuid.UUID(tip_id_str)
     except ValueError:
-        await query.edit_message_text("❌ Invalid tip ID.")
+        await query.answer("Invalid tip ID.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -1198,12 +1534,32 @@ async def handle_creator_approval(
         tip = res.scalar_one_or_none()
 
         if not tip:
-            await query.edit_message_text("❌ Tip not found.")
+            await query.answer("Tip not found.", show_alert=True)
             return
 
         c_stmt = select(Creator).where(Creator.id == tip.creator_id)
         c_res = await session.execute(c_stmt)
         creator = c_res.scalar_one_or_none()
+
+        if creator is None:
+            await query.answer("Creator not found.", show_alert=True)
+            return
+
+        if query.from_user.id != creator.telegram_id:
+            logger.warning(
+                "Blocked tip approval by non-owner: user %s tried to process tip %s owned by %s",
+                query.from_user.id,
+                tip.id,
+                creator.telegram_id,
+            )
+            await query.answer("⛔ Only the creator can process this tip.", show_alert=True)
+            return
+
+        if tip.status != "pending_verification":
+            await query.answer(f"This tip was already processed ({tip.status}).", show_alert=True)
+            return
+
+        await query.answer()
 
         if is_approve:
             tip.status = "success"
@@ -1388,12 +1744,18 @@ async def mytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         pro_line = f"⭐ **Pro:** active until *{active_sub.expires_at.strftime('%b %d, %Y')}*\n\n"
     else:
         pro_line = "⭐ **Pro:** not active — run `/pro` to upgrade!\n\n"
+    av_line = (
+        ""
+        if creator.account_verified
+        else "⚠️ *Account not verified* — run `/verifyaccount` so tippers can trust your payouts.\n\n"
+    )
     text = (
         f"📊 **Creator Dashboard — {creator.display_name}**\n"
         f"Payment Method: **{method_str}** (`{creator.account_number}`)\n\n"
         f"💰 **Total Tips Earned:** `{float(total_amount):,.2f} ETB`\n"
         f"🎉 **Total Tips Received:** `{total_count}`\n"
         f"{pro_line}"
+        f"{av_line}"
         f"🔗 **Your Tip Link:**\n`{deep_link}`\n\n"
     )
 

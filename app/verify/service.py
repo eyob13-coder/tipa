@@ -1,6 +1,7 @@
 """Auto-verification service used by both the bot claim flow and the Mini App API."""
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,10 +42,16 @@ async def log_verification_attempt(
     await session.commit()
 
 
-def _amount_matches(verified_amount: float | None, expected: float) -> bool:
+def _amount_matches(verified_amount, expected) -> bool:
+    """Exact cent-level comparison — never float arithmetic on money."""
     if verified_amount is None:
         return True
-    return abs(verified_amount - expected) < 0.01
+    try:
+        verified = Decimal(str(verified_amount)).quantize(Decimal("0.01"))
+        expected_dec = Decimal(str(expected)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return False
+    return verified == expected_dec
 
 
 async def auto_verify_tip(

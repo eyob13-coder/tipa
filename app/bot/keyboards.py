@@ -101,6 +101,25 @@ def get_admin_subscription_keyboard(subscription_id: str) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_av_transfer_keyboard() -> InlineKeyboardMarkup:
+    """Buttons for the account-ownership micro-deposit step."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ I Have Sent the Deposit", callback_data="av_sent")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="av_cancel")],
+    ])
+
+
+def get_admin_account_verification_keyboard(creator_id: str) -> InlineKeyboardMarkup:
+    """Manual approval buttons for an account-ownership deposit that couldn't auto-verify."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Approve Ownership", callback_data=f"approve_av:{creator_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject_av:{creator_id}"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def get_confirm_registration_keyboard() -> InlineKeyboardMarkup:
     """Confirmation buttons for creator registration."""
     keyboard = [

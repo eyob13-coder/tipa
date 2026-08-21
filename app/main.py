@@ -4,10 +4,11 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
+from telegram import Update as TelegramUpdate
 
 from app.api.routes import router as api_router
 from app.bot.bot import get_telegram_application
@@ -28,8 +29,13 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global bot_task
-    logger.info("Initializing database...")
-    await init_db()
+
+    # Schema is managed by Alembic in production; create_all only for dev/SQLite.
+    if settings.auto_create_tables or settings.database_url.startswith("sqlite"):
+        logger.info("Initializing database (create_all)...")
+        await init_db()
+    else:
+        logger.info("Skipping create_all — schema managed by Alembic migrations.")
 
     # Initialize Telegram Bot
     if settings.bot_token and settings.bot_token != "sandbox_bot_token":
@@ -37,14 +43,39 @@ async def lifespan(app: FastAPI):
             logger.info("Starting Telegram Bot Application...")
             telegram_app = get_telegram_application()
             await telegram_app.initialize()
-            await telegram_app.bot.delete_webhook(drop_pending_updates=False)
             await telegram_app.start()
-            if telegram_app.updater:
-                await telegram_app.updater.start_polling(
-                    allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post", "callback_query", "inline_query"],
+            if settings.telegram_webhook_url:
+                webhook_url = settings.telegram_webhook_url.rstrip("/")
+                secret_token = settings.telegram_webhook_secret or None
+                await telegram_app.bot.set_webhook(
+                    url=f"{webhook_url}/telegram/webhook",
+                    secret_token=secret_token,
+                    allowed_updates=[
+                        "message",
+                        "edited_message",
+                        "channel_post",
+                        "edited_channel_post",
+                        "callback_query",
+                        "inline_query",
+                    ],
                     drop_pending_updates=False,
                 )
-            logger.info("Telegram Bot started successfully & listening for updates.")
+                logger.info("Telegram Bot started in webhook mode: %s", webhook_url)
+            else:
+                await telegram_app.bot.delete_webhook(drop_pending_updates=False)
+                if telegram_app.updater:
+                    await telegram_app.updater.start_polling(
+                        allowed_updates=[
+                            "message",
+                            "edited_message",
+                            "channel_post",
+                            "edited_channel_post",
+                            "callback_query",
+                            "inline_query",
+                        ],
+                        drop_pending_updates=False,
+                    )
+                logger.info("Telegram Bot started successfully & listening for updates.")
 
             # Start background tip reminder / expiry loop
             bot_task = asyncio.create_task(run_tip_reminder_loop())
@@ -119,6 +150,28 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Receive Telegram updates in webhook mode.
+
+    Only active when TELEGRAM_WEBHOOK_URL is configured; every request must
+    carry the shared secret Telegram echoes back in X-Telegram-Bot-Api-Secret-Token.
+    """
+    if not settings.telegram_webhook_url:
+        raise HTTPException(status_code=404, detail="Webhook mode is disabled")
+    secret = settings.telegram_webhook_secret
+    if not secret or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    data = await request.json()
+    telegram_app = get_telegram_application()
+    update = TelegramUpdate.de_json(data, telegram_app.bot)
+    if update is None:
+        raise HTTPException(status_code=400, detail="Invalid update payload")
+    await telegram_app.update_queue.put(update)
+    return {"ok": True}
 
 
 @app.get("/ready")

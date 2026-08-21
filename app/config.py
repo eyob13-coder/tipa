@@ -28,6 +28,23 @@ class Settings(BaseSettings):
     # Comma-separated Telegram user ids that can manually approve Pro payments
     admin_telegram_ids: str = ""
 
+    # Account ownership proof: creator sends this amount from the registered
+    # account to Tipa's account with a coded reference (micro-deposit).
+    account_verification_amount_birr: float = 1.0
+
+    # Receipt screenshots are persisted here as dispute evidence.
+    receipt_storage_dir: str = "data/receipts"
+
+    # Telegram webhook mode. When set, updates arrive via POST /telegram/webhook
+    # instead of long polling (recommended on Render). Secret must match the
+    # X-Telegram-Bot-Api-Secret-Token header Telegram sends on every update.
+    telegram_webhook_url: str = ""
+    telegram_webhook_secret: str = ""
+
+    # Production databases should be migrated with Alembic only; create_all is
+    # a dev convenience (always on for local SQLite).
+    auto_create_tables: bool = False
+
     @property
     def admin_ids(self) -> set[int]:
         return {

@@ -41,6 +41,7 @@ from app.bot.handlers import (
     subscription_callback,
     text_input_handler,
     tip_amount_callback,
+    verifyaccount_command,
 )
 from app.config import settings
 
@@ -56,6 +57,7 @@ async def post_init_setup(application: Application) -> None:
         BotCommand("register", "Link your payment method (mobile money / bank)"),
         BotCommand("post", "Generate channel post & tip button"),
         BotCommand("mytips", "View total earnings & tips history"),
+        BotCommand("verifyaccount", "Prove your payout account is yours"),
         BotCommand("pro", "Upgrade to Tipa Pro (CSV export & more)"),
         BotCommand("export", "Download your tips as CSV"),
         BotCommand("help", "Command guide & instructions"),
@@ -112,17 +114,18 @@ def build_telegram_application() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(registration_conv)
     app.add_handler(CommandHandler("mytips", mytips_command))
+    app.add_handler(CommandHandler("verifyaccount", verifyaccount_command))
     app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("pro", pro_command))
     app.add_handler(CommandHandler("post", channel_post_generator))
     app.add_handler(CommandHandler("addchannel", addchannel_command))
     app.add_handler(MessageHandler(filters.FORWARDED, addchannel_command))
 
-    # Tipa Pro payment claim / cancel / admin approval callbacks
+    # Tipa Pro / account-verification payment claims, cancels, and admin approvals
     app.add_handler(
         CallbackQueryHandler(
             subscription_callback,
-            pattern=r"^(pro_|approve_sub:|reject_sub:)",
+            pattern=r"^(pro_|av_|approve_sub:|reject_sub:|approve_av:|reject_av:)",
         )
     )
 
