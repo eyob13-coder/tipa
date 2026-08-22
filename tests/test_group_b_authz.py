@@ -179,3 +179,33 @@ async def test_me_rejects_invalid_signature(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         require_valid_init_data("auth_date=1&hash=deadbeef")
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_creator_qr_png_served_server_side(monkeypatch):
+    """Dashboard QR renders on the server — no CDN dependency in the client."""
+    from conftest import make_init_data
+
+    from app.api.routes import creator_qr_png
+
+    engine, factory = await _make_factory()
+    monkeypatch.setattr("app.api.routes.AsyncSessionLocal", factory)
+    monkeypatch.setattr(settings, "bot_token", "12345:test-token")
+    monkeypatch.setattr(settings, "bot_username", "TipaPayBot")
+
+    async with factory() as session:
+        creator = _creator(telegram_id=555)
+        session.add(creator)
+        await session.commit()
+        await session.refresh(creator)
+
+    init_data = make_init_data("12345:test-token", user_id=555)
+    resp = await creator_qr_png(str(creator.id), init_data)
+    body = bytes(resp.body)
+    assert resp.media_type == "image/png"
+    assert body[:8] == b"\x89PNG\r\n\x1a\n"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await creator_qr_png(str(uuid.uuid4()), make_init_data("12345:test-token", user_id=555))
+    assert exc_info.value.status_code == 404
+    await engine.dispose()

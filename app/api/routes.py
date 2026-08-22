@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import io
@@ -9,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +30,7 @@ from app.payment_methods import (
     method_name,
     ussd_code_for,
 )
+from app.posters import build_qr_png
 from app.receipts import build_tips_pdf
 from app.subscriptions import is_pro
 from app.verify.service import auto_verify_tip
@@ -387,6 +389,40 @@ async def _verified_tips_for(session, creator: Creator) -> list[Tip]:
     )
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+
+@router.get("/creator/{identifier}/qr.png")
+async def creator_qr_png(
+    identifier: str,
+    init_data: str = Depends(require_valid_init_data),
+):
+    """Render the creator's tipping deep link as a QR code, server-side.
+
+    The Mini App previously pulled a QR library from cdnjs; inside Telegram's
+    in-app browser that CDN is often blocked or slow (notably in Ethiopia),
+    which left the dashboard QR empty and crashed the rest of the view. The
+    server already had a QR painter — use it.
+    """
+    async with AsyncSessionLocal() as session:
+        creator = None
+        try:
+            creator_uuid = uuid.UUID(identifier)
+            res = await session.execute(select(Creator).where(Creator.id == creator_uuid))
+            creator = res.scalar_one_or_none()
+        except ValueError:
+            pass
+        if not creator and identifier.isdigit():
+            res = await session.execute(
+                select(Creator).where(Creator.telegram_id == int(identifier))
+            )
+            creator = res.scalar_one_or_none()
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+
+    bot_username = settings.bot_username
+    deep_link = f"https://t.me/{bot_username}?start=tip_{creator.id}"
+    png = await asyncio.to_thread(build_qr_png, deep_link)
+    return Response(content=png, media_type="image/png")
 
 
 @router.get("/creator/{identifier}/export")

@@ -6,8 +6,6 @@
   <title>Tipa — Telegram Tipping</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <!-- QRCode.js -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <style>
     :root {
@@ -419,7 +417,12 @@
           </div>
         </div>
 
-        <div class="section-label">Your Channel Tipping QR Code</div>
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+          <button class="btn-primary" style="flex: 1; padding: 10px 0; font-size: 14px;" onclick="downloadExport('csv')">⬇️ Export CSV</button>
+          <button class="btn-primary" style="flex: 1; padding: 10px 0; font-size: 14px;" onclick="downloadExport('pdf')">🧾 PDF Receipt</button>
+        </div>
+
+        <div class="section-label" style="margin-top: 16px;">Your Channel Tipping QR Code</div>
         <div id="qrcode-container"></div>
         <div style="text-align: center; font-size: 12px; color: var(--hint-color); margin-bottom: 12px;">
           Share this QR code or link in your Telegram channel posts!
@@ -538,6 +541,14 @@
       document.getElementById('creator-method-badge').innerText = creator.payment_method.toUpperCase();
     }
 
+    function safeSection(fn, label) {
+      try {
+        fn();
+      } catch (err) {
+        console.error(label + " failed:", err);
+      }
+    }
+
     function renderCreatorDashboard(creator) {
       document.getElementById('tipper-view').classList.add('hidden');
       document.getElementById('creator-view').classList.remove('hidden');
@@ -552,19 +563,44 @@
       }
       document.getElementById('dashboard-method').innerText = creator.payment_method.toUpperCase();
       document.getElementById('pro-badge').classList.toggle('hidden', !creator.is_pro);
-      document.getElementById('stat-total-earned').innerText = creator.total_earned.toFixed(2) + " ETB";
-      document.getElementById('stat-total-count').innerText = creator.total_count;
 
-      // Render QR Code
-      const qrWrap = document.getElementById('qrcode-container');
-      qrWrap.innerHTML = "";
-      new QRCode(qrWrap, {
-        text: creator.deep_link,
-        width: 160,
-        height: 160,
+      // Each section renders independently: one failure must never blank the
+      // rest of the dashboard again (the old CDN QR library did exactly that).
+      safeSection(() => {
+        document.getElementById('stat-total-earned').innerText = creator.total_earned.toFixed(2) + " ETB";
+        document.getElementById('stat-total-count').innerText = creator.total_count;
+      }, "stats");
+
+      safeSection(() => renderRecentTips(creator), "recent tips");
+
+      loadQrCode(creator).catch(err => {
+        console.error("QR code failed:", err);
+        const wrap = document.getElementById('qrcode-container');
+        wrap.innerHTML = '';
+        const link = document.createElement('a');
+        link.href = creator.deep_link;
+        link.textContent = creator.deep_link;
+        link.style.cssText = 'word-break:break-all; font-size:12px;';
+        wrap.appendChild(link);
       });
+    }
 
-      // Render Recent Tips
+    async function loadQrCode(creator) {
+      const wrap = document.getElementById('qrcode-container');
+      wrap.innerHTML = '';
+      const res = await fetch(`/api/creator/${creator.id}/qr.png`, {
+        headers: { 'X-Telegram-Init-Data': tg?.initData || '' }
+      });
+      if (!res.ok) throw new Error("QR request failed: " + res.status);
+      const blob = await res.blob();
+      const img = document.createElement('img');
+      img.alt = 'Channel tipping QR code';
+      img.src = URL.createObjectURL(blob);
+      img.style.cssText = 'width:180px; height:180px; display:block; margin:0 auto;';
+      wrap.appendChild(img);
+    }
+
+    function renderRecentTips(creator) {
       const listWrap = document.getElementById('recent-tips-list');
       if (creator.recent_tips && creator.recent_tips.length > 0) {
         // tipper names / notes are user-supplied — escape before interpolating.
@@ -581,6 +617,39 @@
             <div style="font-weight:800; color:var(--gold-color);">${esc(t.amount)} ETB</div>
           </div>
         `).join('');
+      } else {
+        listWrap.innerHTML = `
+          <div style="text-align:center; font-size:13px; color:var(--hint-color); padding:16px;">
+            No tips received yet. Share your tipping link in your channel!
+          </div>`;
+      }
+    }
+
+    async function downloadExport(kind) {
+      if (!currentCreatorData) return;
+      try {
+        const url = `/api/creator/${currentCreatorData.id}/export${kind === 'pdf' ? '.pdf' : ''}`;
+        const res = await fetch(url, {
+          headers: { 'X-Telegram-Init-Data': tg?.initData || '' }
+        });
+        if (res.status === 403) {
+          alert('Exports are a PRO feature. Upgrade via @TipaPayBot to unlock CSV and PDF exports.');
+          return;
+        }
+        if (!res.ok) {
+          alert('Export failed. Please try again later.');
+          return;
+        }
+        const blob = await res.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = kind === 'pdf' ? 'tipa_tips.pdf' : 'tipa_tips.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch (err) {
+        console.error('Export error:', err);
+        alert('Export failed. Please try again later.');
       }
     }
 
