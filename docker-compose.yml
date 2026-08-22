@@ -5,14 +5,20 @@ services:
     image: postgres:15-alpine
     container_name: tipa_postgres
     restart: always
+    # Dev-only defaults; override POSTGRES_PASSWORD in any shared environment.
     environment:
-      POSTGRES_USER: tipa_user
-      POSTGRES_PASSWORD: tipa_password
-      POSTGRES_DB: tipa_db
+      POSTGRES_USER: ${POSTGRES_USER:-tipa_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tipa_password}
+      POSTGRES_DB: ${POSTGRES_DB:-tipa_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   web:
     build: .
@@ -21,6 +27,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - APP_ENV=${APP_ENV:-development}
       - BOT_TOKEN=${BOT_TOKEN:-}
       - BOT_USERNAME=TipaPayBot
       - VERIFY_ET_API_KEY=${VERIFY_ET_API_KEY:-}
@@ -32,7 +39,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://tipa_user:tipa_password@db:5432/tipa_db
       - PLATFORM_FEE_BIRR=0.0
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:

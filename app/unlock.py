@@ -20,8 +20,6 @@ def _chat_id(raw: str):
     except (TypeError, ValueError):
         return raw
 
-logger = logging.getLogger(__name__)
-
 
 async def send_unlock_invite(tip_id: str, bot=None) -> None:
     """After a verified tip, DM the tipper a one-time invite to the creator's VIP channel.

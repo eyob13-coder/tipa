@@ -277,7 +277,7 @@ async def metrics():
 
 
 @app.get("/overlay/{creator_id}")
-async def overlay_page(creator_id):
+async def overlay_page(creator_id: str):
     """OBS browser-source page showing live tip alerts for one creator."""
     from app.overlay import render_overlay_page
 

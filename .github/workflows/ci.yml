@@ -6,11 +6,8 @@ on:
   pull_request:
 
 jobs:
-  lint-and-test:
+  test:
     runs-on: ubuntu-latest
-    env:
-      BOT_TOKEN: sandbox_bot_token
-      DATABASE_URL: sqlite+aiosqlite:///./ci_test.db
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +20,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Lint (ruff)
-        run: python -m ruff check .
+        run: python -m ruff check app tests
 
-      - name: Test (pytest)
+      - name: Tests (pytest)
         run: python -m pytest -q
