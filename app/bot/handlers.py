@@ -506,7 +506,7 @@ async def handle_admin_subscription_approval(
                 provider="admin_approval",
                 status="success",
                 verified=True,
-                amount=float(sub.amount),
+                amount=sub.amount,
                 message="Approved manually by a Tipa admin",
             )
             expiry_str = sub.expires_at.strftime("%b %d, %Y") if sub.expires_at else "now"
@@ -535,7 +535,7 @@ async def handle_admin_subscription_approval(
                 provider="admin_approval",
                 status="rejected",
                 verified=False,
-                amount=float(sub.amount),
+                amount=sub.amount,
                 message="Rejected by a Tipa admin",
             )
             await query.edit_message_text(
@@ -2666,3 +2666,4 @@ async def auto_channel_post_handler(update: Update, context: ContextTypes.DEFAUL
             base_text,
             bound_caption,
         )
+
