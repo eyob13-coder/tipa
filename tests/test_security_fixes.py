@@ -211,15 +211,26 @@ async def test_claim_rate_limit_window_resets(monkeypatch):
 # --- Fix 5: receipt evidence persistence ---------------------------------
 
 
+def _tiny_jpeg() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color=(200, 30, 30)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def test_save_receipt_photo_writes_file(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "receipt_storage_dir", str(tmp_path / "receipts"))
-    path = save_receipt_photo("tip-123", b"\xff\xd8fakejpeg")
+    data = _tiny_jpeg()
+    path = save_receipt_photo("tip-123", data)
     assert path is not None
     from pathlib import Path
 
     stored = Path(path)
     assert stored.exists()
-    assert stored.read_bytes() == b"\xff\xd8fakejpeg"
+    assert stored.read_bytes() == data
     assert "tip-123" in str(stored)
 
 
@@ -229,7 +240,7 @@ def test_save_receipt_photo_handles_empty_and_errors(tmp_path, monkeypatch):
     # Unwritable target -> returns None instead of raising.
     monkeypatch.setattr(settings, "receipt_storage_dir", str(tmp_path / "file.txt"))
     (tmp_path / "file.txt").write_text("not a dir")
-    assert save_receipt_photo("tip-123", b"data") is None
+    assert save_receipt_photo("tip-123", _tiny_jpeg()) is None
 
 
 # --- Fix 6: webhook secret enforcement -----------------------------------

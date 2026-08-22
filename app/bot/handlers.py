@@ -1411,8 +1411,13 @@ def _mask_digits(text: str) -> str:
 
 def extract_ref_code_from_image(image_bytes: bytes) -> str | None:
     """Extract a transaction reference number from a receipt screenshot image via OCR & regex."""
+    from app.storage import MAX_IMAGE_PIXELS
+
     try:
         img = Image.open(io.BytesIO(image_bytes))
+        if img.width * img.height > MAX_IMAGE_PIXELS:
+            logger.warning("Skipping OCR on oversized image (%dx%d)", img.width, img.height)
+            return None
         ocr_text = pytesseract.image_to_string(img)
         logger.info(f"OCR Extracted text snippet: {_mask_digits(ocr_text[:200])}")
 
