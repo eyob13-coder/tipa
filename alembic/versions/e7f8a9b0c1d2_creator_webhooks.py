@@ -39,7 +39,9 @@ def upgrade() -> None:
         ),
         sa.Column("url", sa.String(length=500), nullable=False),
         sa.Column("secret", sa.String(length=128), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+        ),
         sa.Column("last_status", sa.Integer(), nullable=True),
         sa.Column("last_delivered_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
