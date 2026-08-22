@@ -292,6 +292,8 @@ async def overlay_stream(creator_id: str):
     from app.overlay import _KEEPALIVE_SECONDS, format_sse, subscribe, unsubscribe
 
     queue = subscribe(creator_id)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="Too many overlay viewers for this creator")
 
     async def event_stream():
         try:

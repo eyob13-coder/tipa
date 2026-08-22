@@ -18,11 +18,19 @@ logger = logging.getLogger(__name__)
 
 _SUBSCRIBERS: dict[str, set[asyncio.Queue]] = {}
 _KEEPALIVE_SECONDS = 15.0
+# Memory guard: one OBS page plus a few previews is plenty per creator.
+_MAX_SUBSCRIBERS_PER_CREATOR = 50
 
 
-def subscribe(creator_id: str) -> asyncio.Queue:
+def subscribe(creator_id: str) -> asyncio.Queue | None:
+    """Register a listener queue; None when the creator's fan-out is full."""
+    creator_key = str(creator_id)
+    bucket = _SUBSCRIBERS.setdefault(creator_key, set())
+    if len(bucket) >= _MAX_SUBSCRIBERS_PER_CREATOR:
+        logger.warning("Overlay subscriber cap reached for creator %s", creator_id)
+        return None
     queue: asyncio.Queue = asyncio.Queue(maxsize=32)
-    _SUBSCRIBERS.setdefault(str(creator_id), set()).add(queue)
+    bucket.add(queue)
     return queue
 
 
@@ -93,13 +101,27 @@ const CREATOR_ID = __CREATOR_ID__;
 function showAlert(tip) {
   const el = document.createElement('div');
   el.className = 'alert';
-  const note = tip.note ? `<div class="what">"${String(tip.note).slice(0, 80)}"</div>` : '';
-  el.innerHTML = `
-    <div class="emoji">🎁</div>
-    <div>
-      <div class="who">${tip.tipper} tipped ${tip.amount} ETB!</div>
-      ${note}
-    </div>`;
+
+  // Build with textContent — tipper names and notes are user-supplied, so
+  // raw HTML interpolation here would be a stored-XSS sink.
+  const emoji = document.createElement('div');
+  emoji.className = 'emoji';
+  emoji.textContent = '🎁';
+
+  const body = document.createElement('div');
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = `${String(tip.tipper)} tipped ${tip.amount} ETB!`;
+  body.appendChild(who);
+  if (tip.note) {
+    const what = document.createElement('div');
+    what.className = 'what';
+    what.textContent = `"${String(tip.note).slice(0, 80)}"`;
+    body.appendChild(what);
+  }
+
+  el.appendChild(emoji);
+  el.appendChild(body);
   document.getElementById('alerts').appendChild(el);
   setTimeout(() => el.remove(), 6000);
 }
