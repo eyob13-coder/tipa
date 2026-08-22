@@ -2,14 +2,19 @@
 
 One webhook per creator, set with /webhook. Deliveries are HMAC-SHA256
 signed (X-Tipa-Signature) so the receiver can verify authenticity; one
-automatic retry on transient failure.
+automatic retry on transient failure. Creator-supplied URLs are validated
+against SSRF: https only, and never private/link-local/loopback addresses.
 """
+import asyncio
 import hashlib
 import hmac as hmac_mod
+import ipaddress
 import json
 import logging
 import secrets
+import socket
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
@@ -25,6 +30,52 @@ _TIMEOUT_SECONDS = 5.0
 def sign_payload(secret: str, body: bytes) -> str:
     """HMAC-SHA256 hex digest of the exact request body."""
     return hmac_mod.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _is_blocked_ip(ip: str) -> bool:
+    addr = ipaddress.ip_address(ip)
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
+async def validate_webhook_url(url: str, *, strict_dns: bool = True) -> None:
+    """Reject anything but public https endpoints.
+
+    Raises ``ValueError`` with an operator-friendly message. Resolves the
+    hostname so literal internal IPs *and* internal DNS names are both caught;
+    the resolution is repeated at delivery time to blunt DNS-rebinding.
+
+    ``strict_dns``: when True an unresolvable hostname is also rejected
+    (registration path). At delivery time False — a transient DNS outage must
+    degrade to a normal failed attempt, never silently skip delivery.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Webhook URL must be a full https:// URL (e.g. https://api.example.com/hooks/tipa)")
+
+    try:
+        ips = [str(ipaddress.ip_address(parsed.hostname))]
+    except ValueError:
+        try:
+            infos = await asyncio.to_thread(
+                socket.getaddrinfo, parsed.hostname, 443, type=socket.SOCK_STREAM
+            )
+            ips = [info[4][0] for info in infos]
+        except OSError as e:
+            if strict_dns:
+                raise ValueError(f"That hostname doesn't resolve ({e}); double-check the URL.") from e
+            return
+
+    unique_ips = list(dict.fromkeys(ips))
+    blocked = [ip for ip in unique_ips if _is_blocked_ip(ip)]
+    if blocked:
+        raise ValueError("That address is not reachable from Tipa's servers. Use a public https:// endpoint.")
 
 
 def build_event_body(tip: Tip, creator: Creator) -> bytes:
@@ -50,8 +101,10 @@ def build_event_body(tip: Tip, creator: Creator) -> bytes:
 async def set_webhook(telegram_id: int, url: str) -> tuple[bool, str]:
     """Register/replace a creator's webhook. The secret is shown exactly once."""
     url = (url or "").strip().rstrip("/")
-    if not url.startswith("https://"):
-        return False, "⚠️ Webhook URL must start with `https://`."
+    try:
+        await validate_webhook_url(url)
+    except ValueError as e:
+        return False, f"⚠️ {e}"
 
     secret = secrets.token_urlsafe(32)
     async with AsyncSessionLocal() as session:
@@ -130,6 +183,17 @@ async def deliver_tip_verified(tip_id: str) -> None:
                 )
             ).scalar_one_or_none()
             if not webhook:
+                return
+
+            # SSRF guard at delivery time too: DNS may have changed since the
+            # creator registered the endpoint.
+            try:
+                await validate_webhook_url(webhook.url, strict_dns=False)
+            except ValueError:
+                logger.warning(
+                    "Webhook URL %s now resolves to a blocked address; skipping delivery",
+                    webhook.url,
+                )
                 return
 
             body = build_event_body(tip, creator)

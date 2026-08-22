@@ -95,6 +95,22 @@ async def test_set_webhook_rejects_http():
     assert "https://" in message
 
 
+def _patch_dns_public():
+    """Make every hostname resolve to a public IP so tests need no network."""
+    import socket as socket_mod
+
+    fake = [
+        (
+            socket_mod.AF_INET,
+            socket_mod.SOCK_STREAM,
+            6,
+            "",
+            ("93.184.216.34", 443),
+        )
+    ]
+    return patch("app.webhooks.socket.getaddrinfo", create=True, return_value=fake)
+
+
 @pytest.mark.asyncio
 async def test_set_and_disable_webhook_roundtrip():
     engine, factory = _make_db()
@@ -109,7 +125,7 @@ async def test_set_and_disable_webhook_roundtrip():
         )
         await session.commit()
 
-    with patch("app.webhooks.AsyncSessionLocal", factory):
+    with patch("app.webhooks.AsyncSessionLocal", factory), _patch_dns_public():
         ok, message = await set_webhook(8200, "https://api.example.com/hooks/tipa/")
         assert ok is True
         # Secret is shown exactly once in the confirmation.
