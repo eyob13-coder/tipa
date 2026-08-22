@@ -461,40 +461,58 @@
 
     // Main Init Logic
     async function initApp() {
+      const initData = tg?.initData || '';
       let creatorId = getQueryParam('creator_id') || getQueryParam('startapp');
       if (creatorId && creatorId.startsWith('tip_')) {
         creatorId = creatorId.replace('tip_', '');
       }
 
-      const tgUser = tg?.initDataUnsafe?.user;
-      const userIdentifier = creatorId || (tgUser ? tgUser.id : null);
+      // Server-verified identity first. Some Telegram clients (older Desktop
+      // and Web builds) leave initDataUnsafe empty, which used to strand
+      // creators on the public tip page even though their requests carried a
+      // perfectly valid initData signature.
+      let me = null;
+      if (initData) {
+        try {
+          const r = await fetch('/api/me', {
+            headers: { 'X-Telegram-Init-Data': initData }
+          });
+          if (r.ok) me = await r.json();
+        } catch (err) {
+          console.error("Bootstrap failed:", err);
+        }
+      }
 
-      if (!userIdentifier) {
+      // An explicit creator target (deep link / start_param) wins.
+      if (creatorId) {
+        try {
+          const res = await fetch(`/api/creator/${creatorId}`, {
+            headers: { 'X-Telegram-Init-Data': initData }
+          });
+          if (res.ok) {
+            const c = await res.json();
+            currentCreatorData = c;
+            if (me && me.user_id === c.telegram_id) {
+              renderCreatorDashboard(c);
+            } else {
+              renderTipperView(c);
+            }
+            return;
+          }
+        } catch (err) {
+          console.error("Failed to load creator data:", err);
+        }
         renderUnregisteredView();
         return;
       }
 
-      try {
-        const res = await fetch(`/api/creator/${userIdentifier}`, {
-          headers: { 'X-Telegram-Init-Data': tg?.initData || '' }
-        });
-        if (res.ok) {
-          currentCreatorData = await res.json();
-
-          if (creatorId && currentCreatorData.id !== creatorId) {
-            renderTipperView(currentCreatorData);
-          } else if (tgUser && tgUser.id == currentCreatorData.telegram_id) {
-            renderCreatorDashboard(currentCreatorData);
-          } else {
-            renderTipperView(currentCreatorData);
-          }
-        } else {
-          renderUnregisteredView();
-        }
-      } catch (err) {
-        console.error("Failed to load creator data:", err);
-        renderUnregisteredView();
+      if (me && me.is_creator && me.creator) {
+        currentCreatorData = me.creator;
+        renderCreatorDashboard(me.creator);
+        return;
       }
+
+      renderUnregisteredView();
     }
 
     function renderUnregisteredView() {

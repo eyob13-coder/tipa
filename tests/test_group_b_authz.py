@@ -130,3 +130,52 @@ async def test_dev_without_bot_token_stays_open(monkeypatch):
     monkeypatch.setattr(settings, "bot_token", "")
     monkeypatch.setattr(settings, "app_env", "development")
     assert require_valid_init_data("whatever") == "whatever"
+
+
+@pytest.mark.asyncio
+async def test_me_returns_creator_for_owner(monkeypatch):
+    """Server-verified bootstrap: owner gets their dashboard payload."""
+    from conftest import make_init_data
+
+    from app.api.routes import whoami
+
+    engine, factory = await _make_factory()
+    monkeypatch.setattr("app.api.routes.AsyncSessionLocal", factory)
+    monkeypatch.setattr(settings, "bot_token", "12345:test-token")
+
+    async with factory() as session:
+        session.add(_creator(telegram_id=777))
+        await session.commit()
+
+    resp = await whoami(make_init_data("12345:test-token", user_id=777))
+    assert resp["is_creator"] is True
+    assert resp["user_id"] == 777
+    assert resp["creator"]["telegram_id"] == 777
+    assert resp["creator"]["display_name"] == "Creator One"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_me_reports_non_creator_without_leaking(monkeypatch):
+    from conftest import make_init_data
+
+    from app.api.routes import whoami
+
+    engine, factory = await _make_factory()
+    monkeypatch.setattr("app.api.routes.AsyncSessionLocal", factory)
+    monkeypatch.setattr(settings, "bot_token", "12345:test-token")
+
+    resp = await whoami(make_init_data("12345:test-token", user_id=31337))
+    assert resp == {"user_id": 31337, "is_creator": False, "creator": None}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_me_rejects_invalid_signature(monkeypatch):
+    """Garbage initData must never reach the handler in production auth mode."""
+    from app.api.routes import require_valid_init_data
+
+    monkeypatch.setattr(settings, "bot_token", "12345:test-token")
+    with pytest.raises(HTTPException) as exc_info:
+        require_valid_init_data("auth_date=1&hash=deadbeef")
+    assert exc_info.value.status_code == 401

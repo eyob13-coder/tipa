@@ -170,6 +170,39 @@ class TipClaimRequest(BaseModel):
     ref_code: str
 
 
+@router.get("/me")
+async def whoami(init_data: str = Depends(require_valid_init_data)):
+    """Server-verified bootstrap for the Mini App.
+
+    The client must not decide dashboard-vs-public from ``initDataUnsafe``:
+    some Telegram clients (notably older Desktop/Web builds) fail to populate
+    it, which stranded creators on the public tip page. Identity here comes
+    from the initData signature instead.
+    """
+    telegram_user_id = parse_init_data_user(init_data)
+    if telegram_user_id is None and not settings.bot_token:
+        # Dev without a token: no cryptographic identity, mirror legacy shape.
+        return {"user_id": None, "is_creator": False, "creator": None}
+
+    async with AsyncSessionLocal() as session:
+        creator = None
+        if telegram_user_id is not None:
+            res = await session.execute(
+                select(Creator).where(Creator.telegram_id == telegram_user_id)
+            )
+            creator = res.scalar_one_or_none()
+
+        if creator is None:
+            return {
+                "user_id": telegram_user_id,
+                "is_creator": False,
+                "creator": None,
+            }
+
+        profile = await get_creator_profile(str(creator.id), init_data)
+        return {"user_id": telegram_user_id, "is_creator": True, "creator": profile}
+
+
 @router.get("/creator/{identifier}")
 async def get_creator_profile(identifier: str, _init_data: str = Depends(require_valid_init_data)):
     """Fetch creator profile & stats by UUID or Telegram ID."""
