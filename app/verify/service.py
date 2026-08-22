@@ -43,9 +43,15 @@ async def log_verification_attempt(
 
 
 def _amount_matches(verified_amount, expected) -> bool:
-    """Exact cent-level comparison — never float arithmetic on money."""
+    """Exact cent-level comparison — never float arithmetic on money.
+
+    A missing provider amount can NEVER confirm a payment: some rails return
+    ``verified=True`` without echoing the amount, and the reference alone does
+    not prove the tipper sent the claimed sum. Fail safe to creator approval
+    instead.
+    """
     if verified_amount is None:
-        return True
+        return False
     try:
         verified = Decimal(str(verified_amount)).quantize(Decimal("0.01"))
         expected_dec = Decimal(str(expected)).quantize(Decimal("0.01"))

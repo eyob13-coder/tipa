@@ -8,6 +8,7 @@ One webhook per creator: fires HMAC-signed ``tip.verified`` events to an
 HTTPS endpoint the creator controls.
 """
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "e7f8a9b0c1d2"

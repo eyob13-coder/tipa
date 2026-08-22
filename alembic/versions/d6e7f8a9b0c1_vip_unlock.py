@@ -8,6 +8,7 @@ Adds ``creators.vip_channel_id`` — an optional Telegram channel that every
 successfully verified tipper is invited into with a single-use link.
 """
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "d6e7f8a9b0c1"

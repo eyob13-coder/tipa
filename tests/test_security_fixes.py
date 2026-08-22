@@ -148,8 +148,9 @@ def test_amount_matches_decimal_precision():
     assert _amount_matches("50", 50) is True
     assert _amount_matches(49.99, 50.0) is False
     assert _amount_matches(50.004, 50.0) is True  # sub-cent noise rounds away
-    # Providers that don't report an amount intentionally pass (reference-only match).
-    assert _amount_matches(None, 50.0) is True
+    # A missing provider amount must NEVER confirm — fail safe to creator
+    # approval instead of trusting the reference alone.
+    assert _amount_matches(None, 50.0) is False
     assert _amount_matches("abc", 50.0) is False
 
 
